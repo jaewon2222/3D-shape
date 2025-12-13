@@ -10,8 +10,8 @@ except ImportError:
     has_scipy = False
 
 st.set_page_config(page_title="3D 도형 관측기", layout="wide")
-st.title("📐 3D 입체도형 관측소 (윤곽선 모드)")
-st.markdown("점은 숨기고 **검은색 모서리 선**을 추가하여 형태를 명확하게 했습니다.")
+st.title("📐 3D 입체도형 관측소 (두꺼운 윤곽선)")
+st.markdown("윤곽선을 **두껍게(Bold)** 만들고, 원형 도형의 **옆면 이음새 선을 제거**했습니다.")
 
 # --- 사이드바 ---
 st.sidebar.header("설정")
@@ -19,8 +19,11 @@ category = st.sidebar.radio("도형 카테고리", ["각기둥/각뿔/각뿔대"
 
 fig = go.Figure()
 
-# --- 조명 설정 ---
-lighting_effects = dict(ambient=0.6, diffuse=0.5, roughness=0.1, specular=0.4)
+# --- 설정값 ---
+line_width = 8  # 선 두께 (여기서 조절하세요)
+line_color = 'black'
+mesh_opacity = 1.0
+lighting_effects = dict(ambient=0.7, diffuse=0.5, roughness=0.1, specular=0.2)
 
 # ========================================================
 # 1. 각기둥 / 각뿔 / 각뿔대
@@ -31,17 +34,14 @@ if category == "각기둥/각뿔/각뿔대":
     h = st.sidebar.slider("높이", 1.0, 10.0, 5.0)
     rb = st.sidebar.slider("밑면 반지름", 1.0, 5.0, 3.0)
 
-    # 윗면 반지름 결정
     if sub_type == "각기둥": rt = rb
     elif sub_type == "각뿔": rt = 0
     else: rt = st.sidebar.slider("윗면 반지름", 0.1, rb-0.1, rb/2)
 
-    # 좌표 계산
-    theta = np.linspace(0, 2*np.pi, n, endpoint=False) # 끊김 없이 연결
+    theta = np.linspace(0, 2*np.pi, n, endpoint=False)
     x_bot = rb * np.cos(theta); y_bot = rb * np.sin(theta)
     x_top = rt * np.cos(theta); y_top = rt * np.sin(theta)
 
-    # 1. 면(Mesh) 데이터
     x = np.concatenate([x_top, x_bot, [0], [0]])
     y = np.concatenate([y_top, y_bot, [0], [0]])
     z = np.concatenate([np.full(n, h), np.zeros(n), [h], [0]])
@@ -52,52 +52,46 @@ if category == "각기둥/각뿔/각뿔대":
 
     for idx in range(n):
         next_idx = (idx + 1) % n
-        # 옆면
         i.extend([top_start + idx, top_start + idx])
         j.extend([bot_start + idx, bot_start + next_idx])
         k.extend([bot_start + next_idx, top_start + next_idx])
-        # 뚜껑/바닥
         if rt > 0:
             i.extend([top_start + idx]); j.extend([top_start + next_idx]); k.extend([top_center])
         if rb > 0:
             i.extend([bot_start + idx]); j.extend([bot_center]); k.extend([bot_start + next_idx])
 
-    # 2. [핵심] 윤곽선(Line) 데이터 만들기
-    # 선을 그릴 좌표들을 리스트에 담습니다. (None을 넣으면 선이 끊어집니다)
+    # 윤곽선 데이터 (각기둥은 모서리가 뚜렷해야 하므로 세로선 포함)
     x_lines, y_lines, z_lines = [], [], []
-
-    # (1) 윗면 테두리 그리기
-    for idx in range(n):
-        x_lines.extend([x_top[idx], x_top[(idx+1)%n], None])
-        y_lines.extend([y_top[idx], y_top[(idx+1)%n], None])
-        z_lines.extend([h, h, None])
     
-    # (2) 아랫면 테두리 그리기
-    for idx in range(n):
-        x_lines.extend([x_bot[idx], x_bot[(idx+1)%n], None])
-        y_lines.extend([y_bot[idx], y_bot[(idx+1)%n], None])
-        z_lines.extend([0, 0, None])
+    # (1) 윗면 테두리
+    if rt > 0: # 뿔이 아닐 때만
+        x_lines.extend(list(x_top) + [x_top[0]] + [None])
+        y_lines.extend(list(y_top) + [y_top[0]] + [None])
+        z_lines.extend([h]*(n+1) + [None])
+    
+    # (2) 아랫면 테두리
+    x_lines.extend(list(x_bot) + [x_bot[0]] + [None])
+    y_lines.extend(list(y_bot) + [y_bot[0]] + [None])
+    z_lines.extend([0]*(n+1) + [None])
 
-    # (3) 세로 기둥(옆면 모서리) 그리기
+    # (3) 세로 모서리 (각기둥/각뿔은 꼭지점이 있으므로 그려야 함)
     for idx in range(n):
         x_lines.extend([x_top[idx], x_bot[idx], None])
         y_lines.extend([y_top[idx], y_bot[idx], None])
         z_lines.extend([h, 0, None])
 
-    # 그리기: 면(Face)
-    fig.add_trace(go.Mesh3d(x=x, y=y, z=z, i=i, j=j, k=k, color='#00BFFF', opacity=1.0, flatshading=True, lighting=lighting_effects, name='면'))
-    # 그리기: 선(Edge) - 검은색 실선
-    fig.add_trace(go.Scatter3d(x=x_lines, y=y_lines, z=z_lines, mode='lines', line=dict(color='black', width=4), name='윤곽선'))
+    fig.add_trace(go.Mesh3d(x=x, y=y, z=z, i=i, j=j, k=k, color='#00BFFF', opacity=mesh_opacity, flatshading=True, lighting=lighting_effects, name='면'))
+    fig.add_trace(go.Scatter3d(x=x_lines, y=y_lines, z=z_lines, mode='lines', line=dict(color=line_color, width=line_width), name='윤곽선'))
 
 
 # ========================================================
-# 2. 원기둥 / 원뿔 / 원뿔대 (윤곽선 추가)
+# 2. 원기둥 / 원뿔 / 원뿔대 (옆면 선 제거!)
 # ========================================================
 elif category == "원기둥/원뿔/원뿔대":
     sub_type = st.sidebar.selectbox("종류", ["원기둥", "원뿔", "원뿔대"])
     h = st.sidebar.slider("높이", 1.0, 10.0, 5.0)
     rb = st.sidebar.slider("밑면 반지름", 1.0, 5.0, 3.0)
-    n = 60 
+    n = 60 # 매끄러운 원
     
     if sub_type == "원기둥": rt = rb
     elif sub_type == "원뿔": rt = 0
@@ -118,31 +112,25 @@ elif category == "원기둥/원뿔/원뿔대":
         if rt > 0: i.extend([idx]); j.extend([next_idx]); k.extend([2*n])
         if rb > 0: i.extend([n+idx]); j.extend([2*n+1]); k.extend([n+next_idx])
 
-    # 윤곽선: 원은 옆면 선을 다 그리면 까맣게 되므로, 위/아래 테두리만 그립니다.
+    # [핵심 수정] 원형 도형은 세로 선(옆면)을 그리지 않습니다!
     x_lines, y_lines, z_lines = [], [], []
     
-    # 윗면 테두리
-    x_lines.extend(list(x_top) + [x_top[0]] + [None])
-    y_lines.extend(list(y_top) + [y_top[0]] + [None])
-    z_lines.extend([h]*(n+1) + [None])
+    # 윗면 동그라미
+    if rt > 0:
+        x_lines.extend(list(x_top) + [x_top[0]] + [None])
+        y_lines.extend(list(y_top) + [y_top[0]] + [None])
+        z_lines.extend([h]*(n+1) + [None])
     
-    # 아랫면 테두리
+    # 아랫면 동그라미
     x_lines.extend(list(x_bot) + [x_bot[0]] + [None])
     y_lines.extend(list(y_bot) + [y_bot[0]] + [None])
     z_lines.extend([0]*(n+1) + [None])
 
-    # 옆면 선 (2개만 그려서 입체감 표현)
-    # 0도와 180도 지점에만 선을 그음
-    for idx in [0, n//2]:
-        x_lines.extend([x_top[idx], x_bot[idx], None])
-        y_lines.extend([y_top[idx], y_bot[idx], None])
-        z_lines.extend([h, 0, None])
-
-    fig.add_trace(go.Mesh3d(x=x, y=y, z=z, i=i, j=j, k=k, color='#FFD700', opacity=1.0, flatshading=True, lighting=lighting_effects, name='면'))
-    fig.add_trace(go.Scatter3d(x=x_lines, y=y_lines, z=z_lines, mode='lines', line=dict(color='black', width=4), name='윤곽선'))
+    fig.add_trace(go.Mesh3d(x=x, y=y, z=z, i=i, j=j, k=k, color='#FFD700', opacity=mesh_opacity, flatshading=True, lighting=lighting_effects, name='면'))
+    fig.add_trace(go.Scatter3d(x=x_lines, y=y_lines, z=z_lines, mode='lines', line=dict(color=line_color, width=line_width), name='윤곽선'))
 
 # ========================================================
-# 3. 정다면체 (모서리 선 추가)
+# 3. 정다면체
 # ========================================================
 elif category == "정다면체":
     if not has_scipy:
@@ -172,26 +160,22 @@ elif category == "정다면체":
         points = np.array(points) * size
         hull = ConvexHull(points) 
         
-        # 윤곽선 데이터 (삼각형의 모든 변을 그립니다)
         x_lines, y_lines, z_lines = [], [], []
         for simplex in hull.simplices:
-            # 삼각형 p1-p2-p3-p1 연결
             for v_idx in list(simplex) + [simplex[0]]:
                 x_lines.append(points[v_idx][0])
                 y_lines.append(points[v_idx][1])
                 z_lines.append(points[v_idx][2])
-            x_lines.append(None) # 선 끊기
-            y_lines.append(None)
-            z_lines.append(None)
+            x_lines.append(None); y_lines.append(None); z_lines.append(None)
 
         fig.add_trace(go.Mesh3d(x=points[:,0], y=points[:,1], z=points[:,2], 
                                 i=hull.simplices[:,0], j=hull.simplices[:,1], k=hull.simplices[:,2], 
-                                color='#FF8800', opacity=1.0, flatshading=True, lighting=lighting_effects))
+                                color='#FF8800', opacity=mesh_opacity, flatshading=True, lighting=lighting_effects))
         
-        fig.add_trace(go.Scatter3d(x=x_lines, y=y_lines, z=z_lines, mode='lines', line=dict(color='black', width=3), name='윤곽선'))
+        fig.add_trace(go.Scatter3d(x=x_lines, y=y_lines, z=z_lines, mode='lines', line=dict(color=line_color, width=line_width), name='윤곽선'))
 
 # ========================================================
-# 4. 구 (격자 무늬 추가)
+# 4. 구
 # ========================================================
 elif category == "구":
     r = st.sidebar.slider("반지름", 1.0, 5.0, 3.0)
@@ -200,20 +184,20 @@ elif category == "구":
     y = r * np.sin(theta) * np.sin(phi)
     z = r * np.cos(theta)
     
-    # contours 옵션으로 구 표면에 격자(Wireframe)를 그립니다
     fig.add_trace(go.Surface(
         x=x, y=y, z=z, 
         colorscale='Viridis', 
         lighting=lighting_effects,
         contours = {
-            "x": {"show": True, "start": -r, "end": r, "size": r/4, "color":"black"},
-            "y": {"show": True, "start": -r, "end": r, "size": r/4, "color":"black"},
-            "z": {"show": True, "start": -r, "end": r, "size": r/4, "color":"black"}
+            # 구의 격자선도 조금 두껍게(size는 간격이라 width 옵션이 제한적이지만 색상을 진하게)
+            "x": {"show": True, "start": -r, "end": r, "size": r/4, "color":"black", "width": 4},
+            "y": {"show": True, "start": -r, "end": r, "size": r/4, "color":"black", "width": 4},
+            "z": {"show": True, "start": -r, "end": r, "size": r/4, "color":"black", "width": 4}
         }
     ))
 
 # ========================================================
-# [레이아웃] 자동 시점
+# [레이아웃]
 # ========================================================
 fig.update_layout(
     scene=dict(

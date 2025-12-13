@@ -10,8 +10,8 @@ except ImportError:
     has_scipy = False
 
 st.set_page_config(page_title="3D 도형 관측기", layout="wide")
-st.title("📐 3D 입체도형 관측소 (깔끔한 윤곽선)")
-st.markdown("정다면체의 **불필요한 대각선을 제거**하여 더욱 깔끔하게 다듬었습니다.")
+st.title("📐 3D 입체도형 관측소 (최종 완성)")
+st.markdown("깔끔한 윤곽선과 매끈한 구를 구현했습니다.")
 
 # --- 사이드바 ---
 st.sidebar.header("설정")
@@ -118,7 +118,7 @@ elif category == "원기둥/원뿔/원뿔대":
     fig.add_trace(go.Scatter3d(x=x_lines, y=y_lines, z=z_lines, mode='lines', line=dict(color=line_color, width=line_width), name='윤곽선'))
 
 # ========================================================
-# 3. 정다면체 (대각선 제거 로직 적용)
+# 3. 정다면체
 # ========================================================
 elif category == "정다면체":
     if not has_scipy:
@@ -148,23 +148,13 @@ elif category == "정다면체":
         points = np.array(points) * size
         hull = ConvexHull(points) 
         
-        # [핵심 로직] 대각선 제거하기
-        # 1. 모든 가능한 선(Triangulation Edge)을 수집합니다.
-        # 2. 선의 길이를 잽니다.
-        # 3. 정다면체에서 '진짜 모서리'는 길이가 가장 짧습니다. 대각선은 더 깁니다.
-        # 4. 가장 짧은 길이와 비슷한 선만 그립니다.
-        
-        # 모든 엣지 수집
         edges = set()
         for simplex in hull.simplices:
             edges.add(tuple(sorted((simplex[0], simplex[1]))))
             edges.add(tuple(sorted((simplex[1], simplex[2]))))
             edges.add(tuple(sorted((simplex[2], simplex[0]))))
             
-        # 길이 계산 및 필터링
         x_lines, y_lines, z_lines = [], [], []
-        
-        # 최소 길이 찾기 (이게 진짜 모서리 길이)
         min_dist = float('inf')
         edge_list = list(edges)
         distances = []
@@ -172,10 +162,8 @@ elif category == "정다면체":
         for p1_idx, p2_idx in edge_list:
             dist = np.linalg.norm(points[p1_idx] - points[p2_idx])
             distances.append(dist)
-            if dist < min_dist:
-                min_dist = dist
+            if dist < min_dist: min_dist = dist
         
-        # 진짜 모서리만 그리기 (오차 허용 0.01)
         for i, (p1_idx, p2_idx) in enumerate(edge_list):
             if abs(distances[i] - min_dist) < 0.01:
                 x_lines.extend([points[p1_idx][0], points[p2_idx][0], None])
@@ -189,24 +177,23 @@ elif category == "정다면체":
         fig.add_trace(go.Scatter3d(x=x_lines, y=y_lines, z=z_lines, mode='lines', line=dict(color=line_color, width=line_width), name='윤곽선'))
 
 # ========================================================
-# 4. 구
+# 4. 구 (격자 제거)
 # ========================================================
 elif category == "구":
     r = st.sidebar.slider("반지름", 1.0, 5.0, 3.0)
-    phi, theta = np.meshgrid(np.linspace(0, 2*np.pi, 40), np.linspace(0, np.pi, 40))
+    # 구의 매끄러움을 위해 점 개수를 늘림 (40 -> 60)
+    phi, theta = np.meshgrid(np.linspace(0, 2*np.pi, 60), np.linspace(0, np.pi, 60))
     x = r * np.sin(theta) * np.cos(phi)
     y = r * np.sin(theta) * np.sin(phi)
     z = r * np.cos(theta)
     
+    # [수정] contours 옵션을 제거하여 매끈하게 만듦
+    # showscale=False로 컬러바도 숨김
     fig.add_trace(go.Surface(
         x=x, y=y, z=z, 
         colorscale='Viridis', 
         lighting=lighting_effects,
-        contours = {
-            "x": {"show": True, "start": -r, "end": r, "size": r/4, "color":"black", "width": 4},
-            "y": {"show": True, "start": -r, "end": r, "size": r/4, "color":"black", "width": 4},
-            "z": {"show": True, "start": -r, "end": r, "size": r/4, "color":"black", "width": 4}
-        }
+        showscale=False 
     ))
 
 # ========================================================

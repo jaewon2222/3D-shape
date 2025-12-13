@@ -41,9 +41,6 @@ if category == "각기둥/각뿔/각뿔대":
     x_bot = rb * np.cos(theta); y_bot = rb * np.sin(theta)
     x_top = rt * np.cos(theta); y_top = rt * np.sin(theta)
     
-    # [중요] 뼈대(Line) 그리기 위해 순서대로 점을 이을 준비
-    # 윗면 한바퀴 -> 아랫면 한바퀴 -> 세로줄 긋기
-    
     # 1. 면(Mesh) 데이터 구성
     x = np.concatenate([x_top, x_bot, [0], [0]])
     y = np.concatenate([y_top, y_bot, [0], [0]])
@@ -57,9 +54,11 @@ if category == "각기둥/각뿔/각뿔대":
     if rb > 0: # 바닥
         for idx in range(n): i.extend([n+1+idx, 2*n+3, n+1+idx+1])
 
-    # 2. 그래프 추가 (면 + 점 + 선)
-    fig.add_trace(go.Mesh3d(x=x, y=y, z=z, i=i, j=j, k=k, color='cyan', opacity=0.5, name='면'))
-    fig.add_trace(go.Scatter3d(x=x, y=y, z=z, mode='markers', marker=dict(size=5, color='black'), name='점'))
+    # 2. 그래프 추가 (면 + 점)
+    # 점을 먼저 그립니다 (빨간색, 큰 점)
+    fig.add_trace(go.Scatter3d(x=x, y=y, z=z, mode='markers', marker=dict(size=5, color='red'), name='점(Vertex)'))
+    # 면을 그립니다 (반투명)
+    fig.add_trace(go.Mesh3d(x=x, y=y, z=z, i=i, j=j, k=k, color='cyan', opacity=0.5, name='면(Mesh)'))
     
     # 데이터 디버깅용 저장
     points_df = pd.DataFrame({"X": x, "Y": y, "Z": z})
@@ -90,8 +89,8 @@ elif category == "원기둥/원뿔/원뿔대":
     if rb > 0:
         for idx in range(n): i.extend([n+1+idx, 2*n+3, n+1+idx+1])
 
+    fig.add_trace(go.Scatter3d(x=x, y=y, z=z, mode='markers', marker=dict(size=4, color='red'), name='점'))
     fig.add_trace(go.Mesh3d(x=x, y=y, z=z, i=i, j=j, k=k, color='gold', opacity=0.6, name='면'))
-    fig.add_trace(go.Scatter3d(x=x, y=y, z=z, mode='lines', line=dict(color='black', width=2), name='선'))
     points_df = pd.DataFrame({"X": x, "Y": y, "Z": z})
 
 # ========================================================
@@ -99,7 +98,7 @@ elif category == "원기둥/원뿔/원뿔대":
 # ========================================================
 elif category == "정다면체":
     if not has_scipy:
-        st.error("Scipy가 없습니다. Mesh는 안 보이지만 점은 찍어보겠습니다.")
+        st.error("Scipy 라이브러리가 없습니다. Mesh는 안 보이지만 점은 찍어보겠습니다.")
     
     sub_type = st.sidebar.selectbox("도형", ["정사면체", "정육면체", "정팔면체", "정십이면체", "정이십면체"])
     size = st.sidebar.slider("크기", 1.0, 5.0, 3.0)
@@ -147,7 +146,6 @@ elif category == "구":
     z = r * np.cos(theta)
     
     fig.add_trace(go.Surface(x=x, y=y, z=z, colorscale='Viridis', opacity=0.8))
-    # 구는 데이터가 많아서 DataFrame 출력 생략
 
 # ========================================================
 # [레이아웃] 자동 시점 (aspectmode='data')

@@ -1,226 +1,162 @@
 import streamlit as st
 import plotly.graph_objects as go
 import numpy as np
-from scipy.spatial import ConvexHull  # 정다면체 면 구성을 위해 필요
+from scipy.spatial import ConvexHull
 
 # --- 페이지 설정 ---
-st.set_page_config(page_title="종합 입체도형 관측기", layout="wide")
-st.title("📐 종합 입체도형 관측소")
-st.markdown("왼쪽 사이드바에서 **도형의 종류**와 **각 수(n)**를 설정해보세요.")
+st.set_page_config(page_title="3D 입체도형 관측기", layout="wide")
+
+# 스타일링: 여백 줄이기
+st.markdown("""
+    <style>
+    .block-container {padding-top: 1rem; padding-bottom: 0rem;}
+    </style>
+""", unsafe_allow_html=True)
+
+st.title("📐 왜곡 없는 3D 입체도형 관측소")
+st.markdown("도형이 잘리거나 찌그러지지 않도록 **1:1:1 비율**과 **넓은 시야**를 적용했습니다.")
 
 # --- 사이드바: 메뉴 선택 ---
 st.sidebar.header("설정")
 category = st.sidebar.radio(
-    "도형 카테고리 선택",
-    ["각기둥/각뿔/각뿔대", "원기둥/원뿔/원뿔대", "정다면체 (Platonic Solids)", "구 (Sphere)"]
+    "도형 카테고리",
+    ["각기둥/각뿔/각뿔대", "원기둥/원뿔/원뿔대", "정다면체 (Platonic)", "구 (Sphere)"]
 )
 
-# --- 함수 1: 기둥, 뿔, 뿔대 생성 (다각형 및 원형 공통) ---
+# --- 공통 함수: 다각형/원형 기둥, 뿔, 대 생성 ---
 def create_general_mesh(n, r_bottom, r_top, height, color='cyan', name='Shape'):
-    """
-    n: 각형의 수 (원은 60 이상)
-    r_bottom: 밑면 반지름
-    r_top: 윗면 반지름 (0이면 뿔, r_bottom과 같으면 기둥)
-    height: 높이
-    """
-    # 각도 생성 (0 ~ 2pi)
     theta = np.linspace(0, 2*np.pi, n+1)
     
-    # 좌표 계산
     x_bottom = r_bottom * np.cos(theta)
     y_bottom = r_bottom * np.sin(theta)
-    z_bottom = np.zeros_like(theta) # 바닥은 z=0
+    z_bottom = np.zeros_like(theta)
 
     x_top = r_top * np.cos(theta)
     y_top = r_top * np.sin(theta)
-    z_top = np.full_like(theta, height) # 윗면은 z=height
+    z_top = np.full_like(theta, height)
 
-    # 모든 점 합치기: [윗면 테두리... 아랫면 테두리... 윗면 중심, 아랫면 중심]
-    # 인덱스: 0~n(윗면), n+1~2n+1(아랫면), 2n+2(윗면중심), 2n+3(아랫면중심)
     x = np.concatenate([x_top, x_bottom, [0], [0]])
     y = np.concatenate([y_top, y_bottom, [0], [0]])
     z = np.concatenate([z_top, z_bottom, [height], [0]])
     
-    # 면(Triangle) 구성 인덱스 리스트
     i_list, j_list, k_list = [], [], []
 
-    # 1. 옆면 구성
+    # 옆면
     for idx in range(n):
-        # 사각형을 삼각형 2개로 쪼개서 옆면을 만듦
-        # 삼각형 1
-        i_list.append(idx)
-        j_list.append(n + 1 + idx)
-        k_list.append(n + 1 + idx + 1)
-        # 삼각형 2
-        i_list.append(idx)
-        j_list.append(n + 1 + idx + 1)
-        k_list.append(idx + 1)
+        i_list.extend([idx, idx])
+        j_list.extend([n + 1 + idx, n + 1 + idx + 1])
+        k_list.extend([n + 1 + idx + 1, idx + 1])
 
-    # 2. 윗면 뚜껑 (반지름이 0보다 클 때만)
+    # 윗면
     if r_top > 0:
-        center_top_idx = 2 * n + 2
+        center_top = 2 * n + 2
         for idx in range(n):
-            i_list.append(idx)
-            j_list.append(idx + 1)
-            k_list.append(center_top_idx)
+            i_list.extend([idx, idx + 1, center_top])
 
-    # 3. 아랫면 바닥 (반지름이 0보다 클 때만)
+    # 아랫면
     if r_bottom > 0:
-        center_bottom_idx = 2 * n + 3
+        center_bottom = 2 * n + 3
         for idx in range(n):
-            i_list.append(n + 1 + idx)
-            j_list.append(center_bottom_idx)
-            k_list.append(n + 1 + idx + 1)
+            i_list.extend([n + 1 + idx, center_bottom, n + 1 + idx + 1])
 
-    return go.Mesh3d(
-        x=x, y=y, z=z,
-        i=i_list, j=j_list, k=k_list,
-        opacity=0.7,
-        color=color,
-        flatshading=True,
-        name=name
-    )
+    return go.Mesh3d(x=x, y=y, z=z, i=i_list, j=j_list, k=k_list, opacity=0.8, color=color, flatshading=True, name=name)
 
-# --- 함수 2: 정다면체 생성 (ConvexHull 사용) ---
+# --- 공통 함수: 정다면체 ---
 def get_platonic_solid(name, size):
-    phi = (1 + np.sqrt(5)) / 2  # 황금비
-
+    phi = (1 + np.sqrt(5)) / 2
     points = []
     
-    # 1. 정사면체
     if "정사면체" in name:
         points = [[1, 1, 1], [1, -1, -1], [-1, 1, -1], [-1, -1, 1]]
-
-    # 2. 정육면체
     elif "정육면체" in name:
         for x in [-1, 1]:
             for y in [-1, 1]:
-                for z in [-1, 1]:
-                    points.append([x, y, z])
-
-    # 3. 정팔면체
+                for z in [-1, 1]: points.append([x, y, z])
     elif "정팔면체" in name:
-        points = [
-            [1, 0, 0], [-1, 0, 0], [0, 1, 0], 
-            [0, -1, 0], [0, 0, 1], [0, 0, -1]
-        ]
-
-    # 4. 정십이면체 (황금비 이용)
+        points = [[1,0,0], [-1,0,0], [0,1,0], [0,-1,0], [0,0,1], [0,0,-1]]
     elif "정십이면체" in name:
-        # (±1, ±1, ±1)
         for x in [-1, 1]:
             for y in [-1, 1]:
-                for z in [-1, 1]:
-                    points.append([x, y, z])
-        # (0, ±phi, ±1/phi) 순환
+                for z in [-1, 1]: points.append([x, y, z])
         for i in [-1, 1]:
             for j in [-1, 1]:
-                points.append([0, i*phi, j/phi])
-                points.append([j/phi, 0, i*phi])
-                points.append([i*phi, j/phi, 0])
-
-    # 5. 정이십면체 (황금비 이용)
+                points.extend([[0, i*phi, j/phi], [j/phi, 0, i*phi], [i*phi, j/phi, 0]])
     elif "정이십면체" in name:
-        # (0, ±1, ±phi) 순환
         for i in [-1, 1]:
             for j in [-1, 1]:
-                points.append([0, i, j*phi])
-                points.append([j*phi, 0, i])
-                points.append([i, j*phi, 0])
+                points.extend([[0, i, j*phi], [j*phi, 0, i], [i, j*phi, 0]])
     
-    # --- 점들을 이용해 면 자동 생성 (ConvexHull) ---
     points = np.array(points) * size
-    hull = ConvexHull(points) 
+    hull = ConvexHull(points)
     
-    x, y, z = points[:, 0], points[:, 1], points[:, 2]
-    i, j, k = hull.simplices[:, 0], hull.simplices[:, 1], hull.simplices[:, 2]
-
-    # 색상 지정
-    color_map = {
-        "정사면체": "magenta", "정육면체": "cyan", "정팔면체": "orange",
-        "정십이면체": "lime", "정이십면체": "violet"
-    }
-    # 이름에서 키워드 추출하여 색상 결정
+    color_map = {"정사면체": "magenta", "정육면체": "cyan", "정팔면체": "orange", "정십이면체": "lime", "정이십면체": "violet"}
     color = "gray"
     for key in color_map:
-        if key in name:
-            color = color_map[key]
+        if key in name: color = color_map[key]
 
-    return go.Mesh3d(
-        x=x, y=y, z=z, i=i, j=j, k=k,
-        color=color, opacity=0.8, flatshading=True, name=name
-    )
+    return go.Mesh3d(x=points[:,0], y=points[:,1], z=points[:,2], i=hull.simplices[:,0], j=hull.simplices[:,1], k=hull.simplices[:,2], color=color, opacity=0.8, flatshading=True, name=name)
 
 # --- 메인 로직 ---
 fig = go.Figure()
 
-# 1. 각기둥 / 각뿔 / 각뿔대
 if category == "각기둥/각뿔/각뿔대":
     st.sidebar.subheader("상세 설정")
-    sub_type = st.sidebar.selectbox("종류", ["각기둥", "각뿔", "각뿔대"])
-    n_sides = st.sidebar.number_input("밑면의 각 수 (n)", min_value=3, max_value=20, value=4, step=1)
-    height = st.sidebar.slider("높이", 1.0, 10.0, 5.0)
-    r_bottom = st.sidebar.slider("밑면 반지름", 1.0, 5.0, 3.0)
+    sub = st.sidebar.selectbox("종류", ["각기둥", "각뿔", "각뿔대"])
+    n = st.sidebar.number_input("각 수 (n)", 3, 20, 4)
+    h = st.sidebar.slider("높이", 1.0, 15.0, 5.0) # 높이 최대값 15로 증가
+    rb = st.sidebar.slider("밑면 반지름", 1.0, 8.0, 3.0)
 
-    if sub_type == "각기둥":
-        fig.add_trace(create_general_mesh(n_sides, r_bottom, r_bottom, height, 'skyblue', f"{n_sides}각기둥"))
-    elif sub_type == "각뿔":
-        fig.add_trace(create_general_mesh(n_sides, r_bottom, 0, height, 'salmon', f"{n_sides}각뿔"))
-    elif sub_type == "각뿔대":
-        r_top = st.sidebar.slider("윗면 반지름", 0.1, r_bottom-0.1, r_bottom/2)
-        fig.add_trace(create_general_mesh(n_sides, r_bottom, r_top, height, 'lightgreen', f"{n_sides}각뿔대"))
+    if sub == "각기둥": fig.add_trace(create_general_mesh(n, rb, rb, h, 'skyblue', f"{n}각기둥"))
+    elif sub == "각뿔": fig.add_trace(create_general_mesh(n, rb, 0, h, 'salmon', f"{n}각뿔"))
+    elif sub == "각뿔대":
+        rt = st.sidebar.slider("윗면 반지름", 0.1, rb-0.1, rb/2)
+        fig.add_trace(create_general_mesh(n, rb, rt, h, 'lightgreen', f"{n}각뿔대"))
 
-# 2. 원기둥 / 원뿔 / 원뿔대
 elif category == "원기둥/원뿔/원뿔대":
     st.sidebar.subheader("상세 설정")
-    sub_type = st.sidebar.selectbox("종류", ["원기둥", "원뿔", "원뿔대"])
-    height = st.sidebar.slider("높이", 1.0, 10.0, 5.0)
-    r_bottom = st.sidebar.slider("밑면 반지름", 1.0, 5.0, 3.0)
-    res = 60 # 원을 표현하기 위한 해상도
+    sub = st.sidebar.selectbox("종류", ["원기둥", "원뿔", "원뿔대"])
+    h = st.sidebar.slider("높이", 1.0, 15.0, 5.0)
+    rb = st.sidebar.slider("밑면 반지름", 1.0, 8.0, 3.0)
+    res = 60
 
-    if sub_type == "원기둥":
-        fig.add_trace(create_general_mesh(res, r_bottom, r_bottom, height, 'gold', "원기둥"))
-    elif sub_type == "원뿔":
-        fig.add_trace(create_general_mesh(res, r_bottom, 0, height, 'tomato', "원뿔"))
-    elif sub_type == "원뿔대":
-        r_top = st.sidebar.slider("윗면 반지름", 0.1, r_bottom-0.1, r_bottom/2)
-        fig.add_trace(create_general_mesh(res, r_bottom, r_top, height, 'lime', "원뿔대"))
+    if sub == "원기둥": fig.add_trace(create_general_mesh(res, rb, rb, h, 'gold', "원기둥"))
+    elif sub == "원뿔": fig.add_trace(create_general_mesh(res, rb, 0, h, 'tomato', "원뿔"))
+    elif sub == "원뿔대":
+        rt = st.sidebar.slider("윗면 반지름", 0.1, rb-0.1, rb/2)
+        fig.add_trace(create_general_mesh(res, rb, rt, h, 'lime', "원뿔대"))
 
-# 3. 정다면체
-elif category == "정다면체 (Platonic Solids)":
-    solid_type = st.sidebar.selectbox(
-        "도형 선택", 
-        ["정사면체 (Tetrahedron)", "정육면체 (Cube)", "정팔면체 (Octahedron)", 
-         "정십이면체 (Dodecahedron)", "정이십면체 (Icosahedron)"]
-    )
-    size = st.sidebar.slider("크기", 1.0, 5.0, 3.0)
-    fig.add_trace(get_platonic_solid(solid_type, size))
-    
-    if "십이면체" in solid_type or "이십면체" in solid_type:
-         st.info("💡 Tip: 이 도형은 황금비(Phi ≈ 1.618) 좌표계를 사용하여 그려집니다.")
+elif category == "정다면체 (Platonic)":
+    sub = st.sidebar.selectbox("도형", ["정사면체 (Tetrahedron)", "정육면체 (Cube)", "정팔면체 (Octahedron)", "정십이면체 (Dodecahedron)", "정이십면체 (Icosahedron)"])
+    s = st.sidebar.slider("크기", 1.0, 8.0, 3.0)
+    fig.add_trace(get_platonic_solid(sub, s))
 
-# 4. 구
 elif category == "구 (Sphere)":
-    r = st.sidebar.slider("반지름", 1.0, 5.0, 3.0)
-    
-    phi = np.linspace(0, 2*np.pi, 50)
-    theta = np.linspace(0, np.pi, 50)
-    phi, theta = np.meshgrid(phi, theta)
-    x = r * np.sin(theta) * np.cos(phi)
-    y = r * np.sin(theta) * np.sin(phi)
-    z = r * np.cos(theta)
-    
-    fig.add_trace(go.Surface(x=x, y=y, z=z, colorscale='Viridis', opacity=0.8, name="Sphere"))
+    r = st.sidebar.slider("반지름", 1.0, 8.0, 4.0)
+    phi, theta = np.meshgrid(np.linspace(0, 2*np.pi, 50), np.linspace(0, np.pi, 50))
+    x, y, z = r * np.sin(theta) * np.cos(phi), r * np.sin(theta) * np.sin(phi), r * np.cos(theta)
+    fig.add_trace(go.Surface(x=x, y=y, z=z, colorscale='Viridis', opacity=0.8))
 
-# --- 그래프 공통 레이아웃 ---
+# --- [핵심 수정] 1:1:1 비율 유지 및 잘림 방지 설정 ---
+# 슬라이더 최대값 등을 고려하여 '가상의 방' 크기를 고정합니다.
+max_range = 15.0 
+
 fig.update_layout(
     scene=dict(
-        xaxis=dict(range=[-5, 5], visible=True),
-        yaxis=dict(range=[-5, 5], visible=True),
-        zaxis=dict(range=[-5, 8], visible=True),
-        aspectmode='data' # 비율 유지
+        # 1. 시야각(Aspect Ratio)을 수동(manual)으로 설정하여 비율 왜곡 방지
+        aspectmode='manual',
+        aspectratio=dict(x=1, y=1, z=1), # X:Y:Z 비율을 1:1:1로 강제
+
+        # 2. 축의 범위(Range)를 넉넉하고 동일하게 설정하여 잘림 방지
+        # X, Y는 중심이 0이므로 -15 ~ 15
+        # Z는 바닥이 0이거나 중심이 0일 수 있으므로 넉넉하게 -5 ~ 25로 잡되, 
+        # 화면상 1:1을 유지하려면 범위의 '길이(Span)'가 같아야 함.
+        # 여기서는 단순화를 위해 모든 축을 -15 ~ 15로 통일하고 Z축만 높이를 고려해 이동시킴.
+        xaxis=dict(range=[-max_range, max_range], title='X'),
+        yaxis=dict(range=[-max_range, max_range], title='Y'),
+        zaxis=dict(range=[-5, 25], title='Z'), # 높이가 15까지 가므로 여유 있게 25까지
     ),
-    margin=dict(r=10, l=10, b=10, t=10)
+    margin=dict(r=0, l=0, b=0, t=40), # 불필요한 여백 제거
+    height=700 # 화면 높이 확보
 )
 
 st.plotly_chart(fig, use_container_width=True)

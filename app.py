@@ -10,7 +10,7 @@ except ImportError:
     has_scipy = False
 
 st.set_page_config(page_title="3D 도형 관측기", layout="wide")
-st.title("📐 3D 입체도형 관측소 (최종 완성)")
+st.title("📐 3D 입체도형 관측소)")
 st.markdown("깔끔한 윤곽선과 매끈한 구를 구현했습니다.")
 
 # --- 사이드바 ---
@@ -32,11 +32,11 @@ if category == "각기둥/각뿔/각뿔대":
     sub_type = st.sidebar.selectbox("종류", ["각기둥", "각뿔", "각뿔대"])
     n = st.sidebar.number_input("n (각형)", 3, 20, 4)
     h = st.sidebar.slider("높이", 1.0, 10.0, 5.0)
-    rb = st.sidebar.slider("밑면 반지름", 1.0, 5.0, 3.0)
+    rb = st.sidebar.slider("밑면 크기", 1.0, 5.0, 3.0)
 
     if sub_type == "각기둥": rt = rb
     elif sub_type == "각뿔": rt = 0
-    else: rt = st.sidebar.slider("윗면 반지름", 0.1, rb-0.1, rb/2)
+    else: rt = st.sidebar.slider("윗면 크기", 0.1, rb-0.1, rb/2)
 
     theta = np.linspace(0, 2*np.pi, n, endpoint=False)
     x_bot = rb * np.cos(theta); y_bot = rb * np.sin(theta)

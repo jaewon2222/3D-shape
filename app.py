@@ -10,7 +10,7 @@ except ImportError:
     has_scipy = False
 
 st.set_page_config(page_title="3D 도형 관측기", layout="wide")
-st.title("📐 3D 입체도형 관측소)")
+st.title("📐 3D 입체도형 관측소")
 st.markdown("깔끔한 윤곽선과 매끈한 구를 구현했습니다.")
 
 # --- 사이드바 ---

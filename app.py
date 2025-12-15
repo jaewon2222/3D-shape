@@ -5,7 +5,6 @@ from scipy.spatial import ConvexHull
 
 # --- 페이지 설정 ---
 st.set_page_config(page_title="도형 생성기", layout="wide")
-st.title("📐 수학 문제집 도형 생성기 (최종 수정)")
 
 # --- 1. 설정 (사이드바) ---
 st.sidebar.header("1. 보기 모드")
@@ -115,7 +114,7 @@ for e, fs in edges.items():
             if v1 or v2: vis_edges.append(e)
             else: hid_edges.append(e)
 
-# --- 5. 그리기 (여기가 수정된 핵심) ---
+# --- 5. 그리기 ---
 fig = go.Figure()
 
 # 숨은 선 (Hidden Lines): 검은색 + 굵은 점선
@@ -128,7 +127,7 @@ for p1, p2 in hid_edges:
 
 fig.add_trace(go.Scatter3d(
     x=x_h, y=y_h, z=z_h, mode='lines',
-    line=dict(color='black', width=4, dash='dash'), # 여기를 수정했습니다 (검정, 굵게)
+    line=dict(color='black', width=4, dash='dash'), 
     name='숨은 선', hoverinfo='none'
 ))
 

@@ -18,7 +18,6 @@ with st.sidebar:
     )
 
     st.header("2. 도형 선택")
-    # 카테고리 이름 약간 수정
     category = st.radio("카테고리", ["각기둥/각뿔/각뿔대", "원기둥/원뿔/구 (매끈함)", "정다면체"])
 
     st.header("3. 도형 회전")
@@ -53,14 +52,12 @@ if category == "각기둥/각뿔/각뿔대":
 
 elif category == "원기둥/원뿔/구 (매끈함)":
     is_curved_surface = True
-    # '구' 옵션 추가
     sub_type = st.sidebar.selectbox("종류", ["원기둥", "원뿔", "원뿔대", "구"])
     
     if sub_type == "구":
         r = st.sidebar.slider("반지름", 1.0, 3.0, 2.0)
-        # 구면 좌표계로 점 생성 (UV Sphere)
-        u_steps = 30 # 가로 해상도
-        v_steps = 15 # 세로 해상도
+        u_steps = 30
+        v_steps = 15
         u = np.linspace(0, 2 * np.pi, u_steps)
         v = np.linspace(0, np.pi, v_steps)
         
@@ -71,7 +68,6 @@ elif category == "원기둥/원뿔/구 (매끈함)":
                 z = r * np.cos(phi)
                 points.append([x, y, z])
     else:
-        # 기존 원기둥/원뿔 로직
         n = 60 
         h = 4.0; rb = 2.0
         if sub_type == "원기둥": rt = rb
@@ -130,7 +126,7 @@ try:
             if edge not in edge_to_faces: edge_to_faces[edge] = []
             edge_to_faces[edge].append(face_idx)
 
-    # --- 5. 선 그리기 로직 ---
+    # --- 5. 선 그리기 로직 (수정된 부분) ---
     visible_edges = set()
     hidden_edges = set()
 
@@ -141,9 +137,87 @@ try:
             v1, v2 = visible_faces_mask[f1], visible_faces_mask[f2]
             
             dot_val = np.dot(n1, n2)
-            # 구(Sphere)의 경우 면들이 매우 부드럽게 이어지므로 0.8 정도면 충분함
             is_smooth_edge = dot_val > 0.8 
             is_flat_internal = dot_val > 0.999 
 
+            # [문제의 구간 수정됨]
             if is_curved_surface and is_smooth_edge:
-                # 곡면 처리: 실루엣(
+                # 곡면 처리: 실루엣(경계선)만 그림
+                if v1 != v2:
+                    visible_edges.add(edge)
+            else:
+                # 각진 도형 처리
+                if is_flat_internal:
+                    continue
+                
+                if v1 or v2:
+                    visible_edges.add(edge)
+                else:
+                    hidden_edges.add(edge)
+
+        else:
+            if any(visible_faces_mask[f] for f in faces): visible_edges.add(edge)
+            else: hidden_edges.add(edge)
+
+    # --- 6. 시각화 ---
+    fig = go.Figure()
+
+    def get_coords(edge_set):
+        x_list, y_list, z_list = [], [], []
+        for p1, p2 in edge_set:
+            pts = rotated_points[[p1, p2]]
+            x_list.extend([pts[0][0], pts[1][0], None])
+            y_list.extend([pts[0][1], pts[1][1], None])
+            z_list.extend([pts[0][2], pts[1][2], None])
+        return x_list, y_list, z_list
+
+    # 숨은 선
+    xh, yh, zh = get_coords(hidden_edges)
+    fig.add_trace(go.Scatter3d(
+        x=xh, y=yh, z=zh, mode='lines',
+        line=dict(color='rgb(80, 80, 80)', width=4, dash='dash'),
+        name='숨은 선', hoverinfo='none'
+    ))
+
+    # 보이는 선
+    xv, yv, zv = get_coords(visible_edges)
+    fig.add_trace(go.Scatter3d(
+        x=xv, y=yv, z=zv, mode='lines',
+        line=dict(color='black', width=5),
+        name='보이는 선', hoverinfo='none'
+    ))
+
+    # 면 채우기
+    visible_mesh_indices = [hull.simplices[i] for i, vis in enumerate(visible_faces_mask) if vis]
+    if visible_mesh_indices:
+        visible_mesh_indices = np.array(visible_mesh_indices)
+        fig.add_trace(go.Mesh3d(
+            x=rotated_points[:,0], y=rotated_points[:,1], z=rotated_points[:,2],
+            i=visible_mesh_indices[:,0], j=visible_mesh_indices[:,1], k=visible_mesh_indices[:,2],
+            color='white', opacity=0.15,
+            lighting=dict(ambient=1.0, diffuse=0.0, specular=0.0),
+            hoverinfo='none', name='면'
+        ))
+
+    proj_type = "orthographic" if "교과서 모드" in projection_mode else "perspective"
+    
+    fig.update_layout(
+        scene=dict(
+            xaxis=dict(visible=False), yaxis=dict(visible=False), zaxis=dict(visible=False),
+            bgcolor='white',
+            aspectmode='data',
+            camera=dict(
+                projection=dict(type=proj_type), 
+                eye=dict(x=0, y=0, z=2.0),
+                up=dict(x=0, y=1, z=0)
+            )
+        ),
+        margin=dict(l=0, r=0, b=0, t=0), height=600, dragmode=False,
+        paper_bgcolor='white',
+        showlegend=False
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+except Exception as e:
+    st.error(f"오류가 발생했습니다: {e}")

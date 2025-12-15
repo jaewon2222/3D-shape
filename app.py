@@ -6,7 +6,7 @@ from scipy.spatial import ConvexHull
 # --- 페이지 설정 ---
 st.set_page_config(page_title="수학 문제집 생성기", layout="wide")
 st.title("📐 수학 문제집 도형 생성기 (실루엣 알고리즘)")
-st.caption("교과서에 나오는 것처럼 '보이는 곡면'은 외곽선만, '각진 모서리'는 선명하게 그립니다.")
+st.caption("교과서 스타일: 구(Sphere) 포함, 보이는 곡면은 외곽선만 그립니다.")
 
 # --- 1. 사이드바 설정 ---
 with st.sidebar:
@@ -18,7 +18,8 @@ with st.sidebar:
     )
 
     st.header("2. 도형 선택")
-    category = st.radio("카테고리", ["각기둥/각뿔/각뿔대", "원기둥/원뿔 (매끈함)", "정다면체"])
+    # 카테고리 이름 약간 수정
+    category = st.radio("카테고리", ["각기둥/각뿔/각뿔대", "원기둥/원뿔/구 (매끈함)", "정다면체"])
 
     st.header("3. 도형 회전")
     col1, col2, col3 = st.columns(3)
@@ -50,18 +51,36 @@ if category == "각기둥/각뿔/각뿔대":
     for t in theta: points.append([rt*np.cos(t), rt*np.sin(t), h/2])
     for t in theta: points.append([rb*np.cos(t), rb*np.sin(t), -h/2])
 
-elif category == "원기둥/원뿔 (매끈함)":
+elif category == "원기둥/원뿔/구 (매끈함)":
     is_curved_surface = True
-    sub_type = st.sidebar.selectbox("종류", ["원기둥", "원뿔", "원뿔대"])
-    n = 60 
-    h = 4.0; rb = 2.0
-    if sub_type == "원기둥": rt = rb
-    elif sub_type == "원뿔": rt = 0.001
-    else: rt = st.sidebar.slider("윗면 반지름", 0.1, 1.9, 1.0)
+    # '구' 옵션 추가
+    sub_type = st.sidebar.selectbox("종류", ["원기둥", "원뿔", "원뿔대", "구"])
     
-    theta = np.linspace(0, 2*np.pi, n, endpoint=False)
-    for t in theta: points.append([rt*np.cos(t), rt*np.sin(t), h/2])
-    for t in theta: points.append([rb*np.cos(t), rb*np.sin(t), -h/2])
+    if sub_type == "구":
+        r = st.sidebar.slider("반지름", 1.0, 3.0, 2.0)
+        # 구면 좌표계로 점 생성 (UV Sphere)
+        u_steps = 30 # 가로 해상도
+        v_steps = 15 # 세로 해상도
+        u = np.linspace(0, 2 * np.pi, u_steps)
+        v = np.linspace(0, np.pi, v_steps)
+        
+        for theta in u:
+            for phi in v:
+                x = r * np.sin(phi) * np.cos(theta)
+                y = r * np.sin(phi) * np.sin(theta)
+                z = r * np.cos(phi)
+                points.append([x, y, z])
+    else:
+        # 기존 원기둥/원뿔 로직
+        n = 60 
+        h = 4.0; rb = 2.0
+        if sub_type == "원기둥": rt = rb
+        elif sub_type == "원뿔": rt = 0.001
+        else: rt = st.sidebar.slider("윗면 반지름", 0.1, 1.9, 1.0)
+        
+        theta = np.linspace(0, 2*np.pi, n, endpoint=False)
+        for t in theta: points.append([rt*np.cos(t), rt*np.sin(t), h/2])
+        for t in theta: points.append([rb*np.cos(t), rb*np.sin(t), -h/2])
 
 elif category == "정다면체":
     sub_type = st.sidebar.selectbox("도형", ["정사면체", "정육면체", "정팔면체", "정십이면체", "정이십면체"])
@@ -122,85 +141,9 @@ try:
             v1, v2 = visible_faces_mask[f1], visible_faces_mask[f2]
             
             dot_val = np.dot(n1, n2)
+            # 구(Sphere)의 경우 면들이 매우 부드럽게 이어지므로 0.8 정도면 충분함
             is_smooth_edge = dot_val > 0.8 
             is_flat_internal = dot_val > 0.999 
 
             if is_curved_surface and is_smooth_edge:
-                if v1 != v2:
-                    visible_edges.add(edge)
-            else:
-                if is_flat_internal:
-                    continue
-                
-                if v1 or v2:
-                    visible_edges.add(edge)
-                else:
-                    hidden_edges.add(edge)
-
-        else:
-            if any(visible_faces_mask[f] for f in faces): visible_edges.add(edge)
-            else: hidden_edges.add(edge)
-
-    # --- 6. 시각화 ---
-    fig = go.Figure()
-
-    def get_coords(edge_set):
-        x_list, y_list, z_list = [], [], []
-        for p1, p2 in edge_set:
-            pts = rotated_points[[p1, p2]]
-            x_list.extend([pts[0][0], pts[1][0], None])
-            y_list.extend([pts[0][1], pts[1][1], None])
-            z_list.extend([pts[0][2], pts[1][2], None])
-        return x_list, y_list, z_list
-
-    # [수정됨] 숨은 선 (점선) - 더 진하고 굵게
-    xh, yh, zh = get_coords(hidden_edges)
-    fig.add_trace(go.Scatter3d(
-        x=xh, y=yh, z=zh, mode='lines',
-        # color='rgb(80, 80, 80)'로 진한 회색 적용, width=4로 두께 증가
-        line=dict(color='rgb(80, 80, 80)', width=4, dash='dash'),
-        name='숨은 선', hoverinfo='none'
-    ))
-
-    # 보이는 선 (실선)
-    xv, yv, zv = get_coords(visible_edges)
-    fig.add_trace(go.Scatter3d(
-        x=xv, y=yv, z=zv, mode='lines',
-        line=dict(color='black', width=5),
-        name='보이는 선', hoverinfo='none'
-    ))
-
-    # 면 채우기
-    visible_mesh_indices = [hull.simplices[i] for i, vis in enumerate(visible_faces_mask) if vis]
-    if visible_mesh_indices:
-        visible_mesh_indices = np.array(visible_mesh_indices)
-        fig.add_trace(go.Mesh3d(
-            x=rotated_points[:,0], y=rotated_points[:,1], z=rotated_points[:,2],
-            i=visible_mesh_indices[:,0], j=visible_mesh_indices[:,1], k=visible_mesh_indices[:,2],
-            color='white', opacity=0.15,
-            lighting=dict(ambient=1.0, diffuse=0.0, specular=0.0),
-            hoverinfo='none', name='면'
-        ))
-
-    proj_type = "orthographic" if "교과서 모드" in projection_mode else "perspective"
-    
-    fig.update_layout(
-        scene=dict(
-            xaxis=dict(visible=False), yaxis=dict(visible=False), zaxis=dict(visible=False),
-            bgcolor='white',
-            aspectmode='data',
-            camera=dict(
-                projection=dict(type=proj_type), 
-                eye=dict(x=0, y=0, z=2.0),
-                up=dict(x=0, y=1, z=0)
-            )
-        ),
-        margin=dict(l=0, r=0, b=0, t=0), height=600, dragmode=False,
-        paper_bgcolor='white',
-        showlegend=False
-    )
-
-    st.plotly_chart(fig, use_container_width=True)
-
-except Exception as e:
-    st.error(f"오류가 발생했습니다: {e}")
+                # 곡면 처리: 실루엣(

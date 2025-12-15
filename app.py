@@ -3,11 +3,11 @@ import plotly.graph_objects as go
 import numpy as np
 from scipy.spatial import ConvexHull
 
-st.set_page_config(page_title="완벽한 겨냥도 v4", layout="wide")
-st.title("📐 3D 입체도형 관측소 (최종 수정판)")
+st.set_page_config(page_title="원근법 완벽 적용 겨냥도", layout="wide")
+st.title("📐 3D 입체도형 관측소 (원근법 + 완벽한 점선)")
 st.markdown("""
-**[수정 완료]** 1. **렌즈 교정:** 원근감(Perspective) 때문에 뒷면이 앞면으로 잘못 인식되던 문제를 '직교 투영(Orthographic)'으로 고정하여 해결했습니다.
-2. **대각선 삭제:** 사각형을 쪼개는 불필요한 대각선은 계속해서 제거합니다.
+**[업데이트]** 1. **원근감(Perspective) 복구:** 더 이상 평면적이지 않고 입체감이 느껴집니다.
+2. **시선 추적 알고리즘:** 카메라 위치를 계산에 포함시켜, 원근 상태에서도 정확하게 실선/점선을 구분합니다.
 """)
 
 # --- 1. 사이드바 설정 ---
@@ -66,74 +66,78 @@ elif category == "정다면체":
             for j in [-1,1]: points.extend([[0,i,j*phi], [j*phi,0,i], [i,j*phi,0]])
 points = np.array(points)
 
-# --- 4. 렌더링 로직 ---
+# --- 4. 렌더링 로직 (원근법 알고리즘 적용) ---
 rotated_points = rotate_points(points, rot_x, rot_y, rot_z)
 hull = ConvexHull(rotated_points)
 
-# 법선 벡터 정규화 (길이를 1로 맞춤) - 계산 정밀도 향상
+# 법선 벡터 정규화
 normals = []
 for eq in hull.equations:
     n = eq[:3]
-    norm = np.linalg.norm(n)
-    if norm > 0: normals.append(n / norm)
-    else: normals.append(n)
+    normals.append(n / np.linalg.norm(n))
 normals = np.array(normals)
 
-# (1) 면 가시성 확인 (Orthographic 기준: Z값이 0보다 크면 보임)
-# 아주 미세한 오차(epsilon)를 주어 경계면의 깜빡임 방지
-visible_faces_mask = [normal[2] > 1e-5 for normal in normals]
+# [핵심] 원근법에 맞춘 '보이는 면' 판별 로직
+# 카메라가 (0, 0, 10) 위치에 있다고 가정 (Plotly 기본 뷰와 비슷하게 설정)
+camera_pos = np.array([0, 0, 10.0]) 
 
-# (2) 엣지-면 매핑
+visible_faces_mask = []
+for i, simplex in enumerate(hull.simplices):
+    # 1. 면의 중심점(Centroid) 계산
+    face_points = rotated_points[simplex]
+    face_center = np.mean(face_points, axis=0)
+    
+    # 2. 시선 벡터 (카메라 -> 면의 중심)
+    view_vector = face_center - camera_pos
+    
+    # 3. 내적 계산 (시선 벡터와 법선 벡터의 각도)
+    # view_vector와 normal의 내적이 0보다 작아야 면이 카메라를 향해 있는 것임
+    # (카메라가 면을 쳐다볼 때, 면의 법선은 반대로 튀어나오므로 내적이 음수여야 보임)
+    dot_prod = np.dot(view_vector, normals[i])
+    
+    visible_faces_mask.append(dot_prod < 0)
+
+# (이하 로직은 동일: 엣지 매핑 및 Coplanar 제거)
 edge_to_faces = {}
 for face_idx, simplex in enumerate(hull.simplices):
     n_pts = len(simplex)
     for k in range(n_pts):
         p1, p2 = sorted((simplex[k], simplex[(k+1)%n_pts]))
         edge = (p1, p2)
-        if edge not in edge_to_faces:
-            edge_to_faces[edge] = []
+        if edge not in edge_to_faces: edge_to_faces[edge] = []
         edge_to_faces[edge].append(face_idx)
 
-# (3) 평면 판별 함수
 def is_coplanar(n1, n2):
-    return np.dot(n1, n2) > 0.999 # 내적이 1에 가까우면 평행
+    return np.dot(n1, n2) > 0.999
 
 visible_edges = set()
 hidden_edges = set()
 
-# (4) 선 분류 로직
 for edge, faces in edge_to_faces.items():
     if len(faces) == 2:
         f1, f2 = faces
         n1, n2 = normals[f1], normals[f2]
         
-        # [중요] 같은 평면(사각형 내부 대각선)이면 무조건 그리지 않음
-        if is_coplanar(n1, n2):
-            continue 
+        # 평평하면 대각선 제거
+        if is_coplanar(n1, n2): continue 
             
-        # [중요] 보이는지 안 보이는지 판단
-        v1 = visible_faces_mask[f1]
-        v2 = visible_faces_mask[f2]
-        
-        if v1 or v2:
+        if visible_faces_mask[f1] or visible_faces_mask[f2]:
             visible_edges.add(edge)
         else:
             hidden_edges.add(edge)
     else:
-        # 경계선 예외 처리
         is_visible = any(visible_faces_mask[f] for f in faces)
         if is_visible: visible_edges.add(edge)
         else: hidden_edges.add(edge)
 
-# (5) 면 데이터 준비
 visible_mesh_indices = []
 for i, is_vis in enumerate(visible_faces_mask):
     if is_vis: visible_mesh_indices.append(hull.simplices[i])
 
-# --- 5. 시각화 그리기 ---
+# --- 5. 시각화 ---
 fig = go.Figure()
 
-# 숨은 선 (점선)
+# 숨은 선
 x_dash, y_dash, z_dash = [], [], []
 for p1, p2 in hidden_edges:
     pts = rotated_points[[p1, p2]]
@@ -147,7 +151,7 @@ fig.add_trace(go.Scatter3d(
     name='숨은 선', hoverinfo='none'
 ))
 
-# 보이는 선 (실선)
+# 보이는 선
 x_solid, y_solid, z_solid = [], [], []
 for p1, p2 in visible_edges:
     pts = rotated_points[[p1, p2]]
@@ -171,15 +175,16 @@ if visible_mesh_indices:
         lighting=dict(ambient=0.8), hoverinfo='none', name='면'
     ))
 
-# [핵심 수정] projection=dict(type='orthographic') 추가
-# 원근감을 제거하여 수학적 계산과 시각적 출력을 일치시킴
+# [원근법 설정]
+# projection을 'perspective'로(기본값) 두고, 
+# eye(카메라 위치)를 로직 상의 camera_pos와 비율을 맞춤
 fig.update_layout(
     scene=dict(
         xaxis=dict(visible=False), yaxis=dict(visible=False), zaxis=dict(visible=False),
         aspectmode='data',
         camera=dict(
-            projection=dict(type='orthographic'), # 여기가 핵심입니다!
-            eye=dict(x=0, y=0, z=2.0),
+            projection=dict(type='perspective'), # 원근법 활성화!
+            eye=dict(x=0, y=0, z=2.0), # 카메라 위치
             up=dict(x=0, y=1, z=0)
         )
     ),

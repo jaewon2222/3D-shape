@@ -128,10 +128,11 @@ for edge, faces in edge_to_faces.items():
         # [수정된 로직 2] 원기둥/원뿔의 "대나무 선" 강력 삭제
         if is_smooth_surface:
             # 위/아래 뚜껑이 아닌 '옆면'인지 판단 (Z축 성분이 작으면 옆면)
+            # 만약 법선벡터의 z값이 0에 가까우면 옆면입니다. (약간의 오차 허용)
             is_side1 = abs(n1[2]) < 0.95
             is_side2 = abs(n2[2]) < 0.95
             
-            # 두 면이 모두 옆면이라면?
+            # 두 면이 모두 옆면이라면? (즉, 옆면 내부의 선이라면)
             if is_side1 and is_side2:
                 # 1. 둘 다 보이는 면이면 -> 앞면의 세로줄임 -> 삭제!
                 if v1 and v2: continue

@@ -10,20 +10,31 @@ except ImportError:
     has_scipy = False
 
 st.set_page_config(page_title="3D 도형 관측기", layout="wide")
-st.title("📐 3D 입체도형 관측소")
-st.markdown("깔끔한 윤곽선과 매끈한 구를 구현했습니다.")
+st.title("📐 3D 입체도형 관측소 (겨냥도 기능)")
+st.markdown("설정에서 **'겨냥도 모드'**를 선택하면 뒷면의 모서리가 비쳐 보입니다.")
 
 # --- 사이드바 ---
 st.sidebar.header("설정")
 category = st.sidebar.radio("도형 카테고리", ["각기둥/각뿔/각뿔대", "원기둥/원뿔/원뿔대", "정다면체", "구"])
+
+# [추가된 기능] 보기 모드 선택
+st.sidebar.markdown("---")
+view_mode = st.sidebar.radio("보기 모드", ["일반 (불투명)", "겨냥도 (반투명)"])
 
 fig = go.Figure()
 
 # --- 설정값 ---
 line_width = 8
 line_color = 'black'
-mesh_opacity = 1.0
-lighting_effects = dict(ambient=0.7, diffuse=0.5, roughness=0.1, specular=0.2)
+
+# 겨냥도 모드일 때 투명도를 낮춤
+if view_mode == "겨냥도 (반투명)":
+    mesh_opacity = 0.3  # 반투명
+    lighting_effects = dict(ambient=0.9, diffuse=0.5, roughness=0.1, specular=0.1) # 빛 반사 줄임
+else:
+    mesh_opacity = 1.0  # 불투명
+    lighting_effects = dict(ambient=0.7, diffuse=0.5, roughness=0.1, specular=0.2)
+
 
 # ========================================================
 # 1. 각기둥 / 각뿔 / 각뿔대
@@ -32,11 +43,11 @@ if category == "각기둥/각뿔/각뿔대":
     sub_type = st.sidebar.selectbox("종류", ["각기둥", "각뿔", "각뿔대"])
     n = st.sidebar.number_input("n (각형)", 3, 20, 4)
     h = st.sidebar.slider("높이", 1.0, 10.0, 5.0)
-    rb = st.sidebar.slider("밑면 크기", 1.0, 5.0, 3.0)
+    rb = st.sidebar.slider("밑면 반지름", 1.0, 5.0, 3.0)
 
     if sub_type == "각기둥": rt = rb
     elif sub_type == "각뿔": rt = 0
-    else: rt = st.sidebar.slider("윗면 크기", 0.1, rb-0.1, rb/2)
+    else: rt = st.sidebar.slider("윗면 반지름", 0.1, rb-0.1, rb/2)
 
     theta = np.linspace(0, 2*np.pi, n, endpoint=False)
     x_bot = rb * np.cos(theta); y_bot = rb * np.sin(theta)
@@ -60,6 +71,7 @@ if category == "각기둥/각뿔/각뿔대":
         if rb > 0:
             i.extend([bot_start + idx]); j.extend([bot_center]); k.extend([bot_start + next_idx])
 
+    # 윤곽선
     x_lines, y_lines, z_lines = [], [], []
     if rt > 0:
         x_lines.extend(list(x_top) + [x_top[0]] + [None])
@@ -105,6 +117,7 @@ elif category == "원기둥/원뿔/원뿔대":
         if rt > 0: i.extend([idx]); j.extend([next_idx]); k.extend([2*n])
         if rb > 0: i.extend([n+idx]); j.extend([2*n+1]); k.extend([n+next_idx])
 
+    # 윤곽선 (옆면 선 없음)
     x_lines, y_lines, z_lines = [], [], []
     if rt > 0:
         x_lines.extend(list(x_top) + [x_top[0]] + [None])
@@ -177,22 +190,20 @@ elif category == "정다면체":
         fig.add_trace(go.Scatter3d(x=x_lines, y=y_lines, z=z_lines, mode='lines', line=dict(color=line_color, width=line_width), name='윤곽선'))
 
 # ========================================================
-# 4. 구 (격자 제거)
+# 4. 구
 # ========================================================
 elif category == "구":
     r = st.sidebar.slider("반지름", 1.0, 5.0, 3.0)
-    # 구의 매끄러움을 위해 점 개수를 늘림 (40 -> 60)
     phi, theta = np.meshgrid(np.linspace(0, 2*np.pi, 60), np.linspace(0, np.pi, 60))
     x = r * np.sin(theta) * np.cos(phi)
     y = r * np.sin(theta) * np.sin(phi)
     z = r * np.cos(theta)
     
-    # [수정] contours 옵션을 제거하여 매끈하게 만듦
-    # showscale=False로 컬러바도 숨김
     fig.add_trace(go.Surface(
         x=x, y=y, z=z, 
         colorscale='Viridis', 
         lighting=lighting_effects,
+        opacity=mesh_opacity, # 구에도 투명도 적용
         showscale=False 
     ))
 

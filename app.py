@@ -4,11 +4,11 @@ import numpy as np
 from scipy.spatial import ConvexHull
 
 st.set_page_config(page_title="궁극의 도형 관측소", layout="wide")
-st.title("📐 3D 입체도형 관측소 (원기둥/원뿔 매끈하게 수정)")
+st.title("📐 3D 입체도형 관측소 (문제집 스타일)")
 st.markdown("""
-**[최종 수정 내용]**
-1. **원기둥/원뿔 개선:** 더 이상 30각형처럼 보이지 않습니다. 곡면 내부의 불필요한 선을 지우고 **윤곽선(Silhouette)**만 남겨 매끈하게 표현합니다.
-2. **투영 모드:** 교과서 모드(직교)와 현실 모드(원근) 완벽 지원.
+**[최종 업데이트]**
+1. **음영 제거:** 조명 효과를 끄고 면을 흰색(투명) 처리하여 **수학 문제집 그림**처럼 깨끗하게 만들었습니다.
+2. **원기둥/원뿔:** 매끈한 곡면 처리로 불필요한 선을 모두 지웠습니다.
 """)
 
 # --- 1. 사이드바 설정 ---
@@ -16,6 +16,13 @@ st.sidebar.header("1. 보기 설정")
 projection_mode = st.sidebar.radio(
     "투영 방식", 
     ["교과서 모드 (직교 투영)", "현실 모드 (원근 투영)"],
+    index=0
+)
+
+# [추가] 면 스타일 선택 기능
+face_style = st.sidebar.radio(
+    "면(Face) 스타일",
+    ["깔끔한 흰색 (음영 없음)", "투명 (선만 보기)", "기존 (파란색 입체감)"],
     index=0
 )
 
@@ -37,7 +44,7 @@ def rotate_points(points, rx, ry, rz):
 
 # --- 3. 도형 데이터 생성 ---
 points = []
-is_smooth_surface = False # 원기둥/원뿔인 경우 True로 설정
+is_smooth_surface = False 
 
 if category == "각기둥/각뿔/각뿔대":
     sub_type = st.sidebar.selectbox("종류", ["각기둥", "각뿔", "각뿔대"])
@@ -51,9 +58,9 @@ if category == "각기둥/각뿔/각뿔대":
     for t in theta: points.append([rb*np.cos(t), rb*np.sin(t), -h/2])
 
 elif category == "원기둥/원뿔 (매끈함)":
-    is_smooth_surface = True # [중요] 매끈한 처리 활성화
+    is_smooth_surface = True
     sub_type = st.sidebar.selectbox("종류", ["원기둥", "원뿔", "원뿔대"])
-    n = 60 # 더 부드럽게 하기 위해 점 개수 증가
+    n = 60 
     h = 4.0; rb = 2.0
     if sub_type == "원기둥": rt = rb
     elif sub_type == "원뿔": rt = 0.001
@@ -81,14 +88,14 @@ points = np.array(points)
 rotated_points = rotate_points(points, rot_x, rot_y, rot_z)
 hull = ConvexHull(rotated_points)
 
-# 법선 벡터 계산
+# 법선 벡터 
 normals = []
 for eq in hull.equations:
     n_vec = eq[:3]
     normals.append(n_vec / np.linalg.norm(n_vec))
 normals = np.array(normals)
 
-# 가시성 판단 (투영 모드에 따라)
+# 가시성 판단
 camera_pos = np.array([0, 0, 10.0])
 visible_faces_mask = []
 
@@ -101,7 +108,7 @@ for i, simplex in enumerate(hull.simplices):
         is_visible = np.dot(view_vector, normals[i]) < 0
     visible_faces_mask.append(is_visible)
 
-# --- 엣지 분류 및 매끈한 처리 로직 ---
+# 엣지 분류 및 매끈한 처리
 edge_to_faces = {}
 for face_idx, simplex in enumerate(hull.simplices):
     n_pts = len(simplex)
@@ -111,12 +118,8 @@ for face_idx, simplex in enumerate(hull.simplices):
         if edge not in edge_to_faces: edge_to_faces[edge] = []
         edge_to_faces[edge].append(face_idx)
 
-def is_coplanar(n1, n2):
-    return np.dot(n1, n2) > 0.999
-
-# [핵심] 옆면인지 판단하는 함수 (법선의 z성분이 작으면 옆면)
-def is_side_face(normal):
-    return abs(normal[2]) < 0.9 # 위/아래 뚜껑이 아니면 옆면으로 간주
+def is_coplanar(n1, n2): return np.dot(n1, n2) > 0.999
+def is_side_face(normal): return abs(normal[2]) < 0.9
 
 visible_edges = set()
 hidden_edges = set()
@@ -127,23 +130,15 @@ for edge, faces in edge_to_faces.items():
         n1, n2 = normals[f1], normals[f2]
         v1, v2 = visible_faces_mask[f1], visible_faces_mask[f2]
         
-        # 1. 완전 평면(사각형 내부 대각선) 제거
         if is_coplanar(n1, n2): continue 
         
-        # 2. [곡면 처리] 원기둥/원뿔일 때, 옆면끼리의 경계선 지우기
         if is_smooth_surface:
-            # 두 면이 모두 옆면이고, 둘 다 보이는 상태라면 -> 그리지 않음 (매끈하게)
-            # 단, 하나는 보이고 하나는 안 보이면(실루엣) -> 그림
             if is_side_face(n1) and is_side_face(n2):
-                if v1 and v2: continue # 곡면 내부의 선 삭제!
+                if v1 and v2: continue # 곡면 내부 선 제거
         
-        # 3. 선 분류 (보이는 선 vs 숨은 선)
-        if v1 or v2:
-            visible_edges.add(edge)
-        else:
-            hidden_edges.add(edge)
+        if v1 or v2: visible_edges.add(edge)
+        else: hidden_edges.add(edge)
     else:
-        # 경계선 예외 처리
         if any(visible_faces_mask[f] for f in faces): visible_edges.add(edge)
         else: hidden_edges.add(edge)
 
@@ -151,10 +146,10 @@ visible_mesh_indices = []
 for i, is_vis in enumerate(visible_faces_mask):
     if is_vis: visible_mesh_indices.append(hull.simplices[i])
 
-# --- 5. 시각화 ---
+# --- 5. 시각화 (스타일 적용) ---
 fig = go.Figure()
 
-# 숨은 선 (원기둥일 때 너무 지저분하면 투명도 조절 가능)
+# [1] 숨은 선 그리기
 x_dash, y_dash, z_dash = [], [], []
 for p1, p2 in hidden_edges:
     pts = rotated_points[[p1, p2]]
@@ -164,11 +159,40 @@ for p1, p2 in hidden_edges:
 
 fig.add_trace(go.Scatter3d(
     x=x_dash, y=y_dash, z=z_dash, mode='lines',
-    line=dict(color='lightgray', width=3, dash='dash'), # 색을 조금 연하게
+    line=dict(color='gray', width=3, dash='dash'),
     name='숨은 선', hoverinfo='none'
 ))
 
-# 보이는 선
+# [2] 면 그리기 (스타일에 따라 분기)
+if visible_mesh_indices:
+    
+    # 기본값: 투명 (선만 보기) - 아무것도 안 그림
+    mesh_color = 'white'
+    mesh_opacity = 0.0 
+    mesh_lighting = dict(ambient=1.0)
+    
+    if "기존" in face_style:
+        mesh_color = '#dceefc'
+        mesh_opacity = 0.5
+        mesh_lighting = dict(ambient=0.6, diffuse=0.9, roughness=0.1, specular=0.3)
+    elif "깔끔한 흰색" in face_style:
+        # [핵심] 그림자를 없애기 위해 ambient=1.0으로 설정
+        mesh_color = 'white' 
+        mesh_opacity = 0.1 # 아주 희미하게 면이 있음을 표시 (숨은 선이 뒤에 보이도록)
+        mesh_lighting = dict(ambient=1.0, diffuse=0.0, specular=0.0)
+    
+    # 투명 모드가 아니면 메쉬 추가
+    if "투명" not in face_style:
+        visible_mesh_indices = np.array(visible_mesh_indices)
+        fig.add_trace(go.Mesh3d(
+            x=rotated_points[:,0], y=rotated_points[:,1], z=rotated_points[:,2],
+            i=visible_mesh_indices[:,0], j=visible_mesh_indices[:,1], k=visible_mesh_indices[:,2],
+            color=mesh_color, opacity=mesh_opacity,
+            lighting=mesh_lighting, # 조명 설정 적용
+            hoverinfo='none', name='면'
+        ))
+
+# [3] 보이는 선 그리기 (맨 위에 그림)
 x_solid, y_solid, z_solid = [], [], []
 for p1, p2 in visible_edges:
     pts = rotated_points[[p1, p2]]
@@ -182,18 +206,7 @@ fig.add_trace(go.Scatter3d(
     name='보이는 선', hoverinfo='none'
 ))
 
-# 면 채우기
-if visible_mesh_indices:
-    visible_mesh_indices = np.array(visible_mesh_indices)
-    fig.add_trace(go.Mesh3d(
-        x=rotated_points[:,0], y=rotated_points[:,1], z=rotated_points[:,2],
-        i=visible_mesh_indices[:,0], j=visible_mesh_indices[:,1], k=visible_mesh_indices[:,2],
-        color='#dceefc', opacity=0.5,
-        lighting=dict(ambient=0.6, diffuse=0.9, roughness=0.1, specular=0.3), # 조명 효과 강화
-        hoverinfo='none', name='면'
-    ))
-
-# 카메라 설정
+# 카메라 및 배경 설정
 if "교과서 모드" in projection_mode:
     proj_type = "orthographic"
     cam_dist = 2.0
@@ -203,7 +216,10 @@ else:
 
 fig.update_layout(
     scene=dict(
-        xaxis=dict(visible=False), yaxis=dict(visible=False), zaxis=dict(visible=False),
+        xaxis=dict(visible=False, showbackground=False), # 배경 격자 제거
+        yaxis=dict(visible=False, showbackground=False),
+        zaxis=dict(visible=False, showbackground=False),
+        bgcolor='white', # 배경색 완전 흰색
         aspectmode='data',
         camera=dict(
             projection=dict(type=proj_type), 
@@ -211,7 +227,8 @@ fig.update_layout(
             up=dict(x=0, y=1, z=0)
         )
     ),
-    margin=dict(l=0, r=0, b=0, t=0), height=600, dragmode=False
+    margin=dict(l=0, r=0, b=0, t=0), height=600, dragmode=False,
+    paper_bgcolor='white' # 전체 배경 흰색
 )
 
 st.plotly_chart(fig, use_container_width=True)

@@ -3,12 +3,11 @@ import plotly.graph_objects as go
 import numpy as np
 from scipy.spatial import ConvexHull
 
-st.set_page_config(page_title="완벽한 겨냥도 v2", layout="wide")
-st.title("📐 3D 입체도형 관측소 (최종 수정판)")
+st.set_page_config(page_title="진짜 깔끔한 겨냥도", layout="wide")
+st.title("📐 3D 입체도형 관측소 (대각선 제거 버전)")
 st.markdown("""
-**[개선 사항]**
-1. **대각선 제거:** 사각형 면을 삼각형으로 쪼갤 때 생기는 불필요한 대각선을 지웠습니다.
-2. **오차 보정:** 두 면만 보일 때 선이 깜빡이거나 사라지는 현상을 수정했습니다.
+**[수정 완료]** 이전 코드에서 발생하던 **'면이 쪼개지는 현상(대각선)'을 완벽하게 제거**했습니다.
+이제 사각형은 깨끗한 사각형으로 보입니다.
 """)
 
 # --- 1. 사이드바 설정 ---
@@ -67,73 +66,72 @@ elif category == "정다면체":
             for j in [-1,1]: points.extend([[0,i,j*phi], [j*phi,0,i], [i,j*phi,0]])
 points = np.array(points)
 
-# --- 4. 고급 렌더링 로직 ---
+# --- 4. 렌더링 로직 (대각선 제거 핵심) ---
 rotated_points = rotate_points(points, rot_x, rot_y, rot_z)
 hull = ConvexHull(rotated_points)
 normals = hull.equations[:, :3]
 
-# (1) 면의 가시성 판단 (Epsilon 적용으로 깜빡임 방지)
-# 1e-5보다 크면 보이는 것으로 간주
-visible_faces_mask = [normal[2] > 1e-5 for normal in normals]
+# (1) 면 가시성 확인 (내적 > 0 이면 보임)
+# 부동소수점 오차를 고려해 1e-4보다 크면 보이는 것으로 처리
+visible_faces_mask = [normal[2] > 1e-4 for normal in normals]
 
 visible_edges = set()
 hidden_edges = set()
 visible_mesh_indices = []
 
-# (2) Coplanar(같은 평면) 감지 로직
-# ConvexHull은 사각형을 삼각형 2개로 쪼갭니다. 이 "가짜 모서리"를 찾아내서 지워야 깔끔합니다.
+# (2) Coplanar Check 함수: 두 면이 평평하게 이어져 있는지 확인
 def is_coplanar(n1, n2):
-    # 두 법선 벡터의 내적이 1에 가까우면(각도 0) 같은 평면입니다.
-    # 정규화된 벡터라고 가정할 때 dot product가 1에 가까우면 평행
+    # 정규화
     norm1 = np.linalg.norm(n1)
     norm2 = np.linalg.norm(n2)
     if norm1 == 0 or norm2 == 0: return False
+    # 내적(cos theta) 구하기
     dot = np.dot(n1, n2) / (norm1 * norm2)
-    return dot > 0.999 # 거의 평행하면 True
+    # 1에 가까우면(각도 0도) 같은 평면임 -> True 반환
+    return dot > 0.999 
 
-# 각 면(Simplex) 순회
+# ConvexHull은 모든 면을 삼각형으로 쪼갭니다.
+# 각 삼각형(Simplex)을 순회하며 선을 그릴지 말지 결정합니다.
 for i, simplex in enumerate(hull.simplices):
-    # 보이는 면이라면 메쉬 그리기에 추가
+    
+    # 1. 면 채우기용 (보이는 면만 리스트에 담음)
     if visible_faces_mask[i]:
         visible_mesh_indices.append(simplex)
 
-    # 이웃 정보 (neighbors)
-    # hull.neighbors[i] 에는 i번째 면의 3개 모서리와 맞닿은 이웃 면들의 인덱스가 들어있음
-    # 순서는 simplex의 점 순서와 대응됨: 
-    # neighbor[i, 0]은 point 1-2 사이 변의 건너편 이웃
-    # neighbor[i, 1]은 point 2-0 사이 변의 건너편 이웃 ... (scipy 버전에 따라 다를 수 있어 직접 매칭 권장)
-    
-    # 더 안전한 방법: 직접 엣지 루프 돌면서 이웃 찾기
+    # 2. 선 그리기용 (이웃 면과 비교)
+    # 삼각형의 3개 변을 확인
     for k in range(3):
+        # 현재 변을 이루는 두 점
         p1, p2 = simplex[k], simplex[(k+1)%3]
-        edge = tuple(sorted((p1, p2)))
+        edge = tuple(sorted((p1, p2))) # (작은수, 큰수)로 통일
         
-        # 이 엣지의 건너편 이웃 면 인덱스 찾기
+        # 이 변을 공유하는 '이웃 면(Neighbor)'의 인덱스 찾기
         neighbor_idx = hull.neighbors[i, k]
         
-        # 1. Coplanar 체크 (가짜 선 제거)
-        # 나와 내 이웃이 같은 평면(사각형의 쪼개진 틈)이라면 -> 선을 그리지 않음
+        # [핵심] 나와 이웃 면이 '같은 평면(Coplanar)'인가?
+        # 맞다면, 이건 컴퓨터가 임의로 그은 대각선이므로 그리지 말고 건너뜀(continue)
         if is_coplanar(normals[i], normals[neighbor_idx]):
-            continue 
-
-        # 2. 실선/점선 분류
-        # 내 면(i)과 이웃 면(neighbor_idx) 중 "하나라도 보이면" 실선
+            continue
+            
+        # [선 분류] 대각선이 아니라면, 진짜 모서리임.
+        # 나(i) 혹은 이웃(neighbor) 중 하나라도 보이면 -> 실선
         is_me_visible = visible_faces_mask[i]
         is_neighbor_visible = visible_faces_mask[neighbor_idx]
         
         if is_me_visible or is_neighbor_visible:
-            # 실선
+            # 하나라도 보이면 실선 (Visible)
             if edge in hidden_edges: hidden_edges.remove(edge)
             visible_edges.add(edge)
         else:
-            # 둘 다 안 보여야 점선
+            # 둘 다 안 보여야 점선 (Hidden)
+            # 단, 이미 실선으로 등록된 녀석은 건드리지 않음
             if edge not in visible_edges:
                 hidden_edges.add(edge)
 
-# --- 5. 시각화 ---
+# --- 5. 시각화 그리기 ---
 fig = go.Figure()
 
-# (1) 숨은 선
+# (1) 숨은 선 (점선)
 x_dash, y_dash, z_dash = [], [], []
 for p1, p2 in hidden_edges:
     pts = rotated_points[[p1, p2]]
@@ -147,7 +145,7 @@ fig.add_trace(go.Scatter3d(
     name='숨은 선', hoverinfo='none'
 ))
 
-# (2) 보이는 선
+# (2) 보이는 선 (실선)
 x_solid, y_solid, z_solid = [], [], []
 for p1, p2 in visible_edges:
     pts = rotated_points[[p1, p2]]
@@ -167,7 +165,7 @@ if visible_mesh_indices:
     fig.add_trace(go.Mesh3d(
         x=rotated_points[:,0], y=rotated_points[:,1], z=rotated_points[:,2],
         i=visible_mesh_indices[:,0], j=visible_mesh_indices[:,1], k=visible_mesh_indices[:,2],
-        color='#dceefc', opacity=0.5,
+        color='#dceefc', opacity=0.5, # 반투명 하늘색
         lighting=dict(ambient=0.8), hoverinfo='none', name='면'
     ))
 

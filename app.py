@@ -3,18 +3,26 @@ import plotly.graph_objects as go
 import numpy as np
 from scipy.spatial import ConvexHull
 
-st.set_page_config(page_title="원근법 완벽 적용 겨냥도", layout="wide")
-st.title("📐 3D 입체도형 관측소 (원근법 + 완벽한 점선)")
+st.set_page_config(page_title="궁극의 입체도형", layout="wide")
+st.title("📐 3D 입체도형 관측소 (투영 모드 선택)")
 st.markdown("""
-**[업데이트]** 1. **원근감(Perspective) 복구:** 더 이상 평면적이지 않고 입체감이 느껴집니다.
-2. **시선 추적 알고리즘:** 카메라 위치를 계산에 포함시켜, 원근 상태에서도 정확하게 실선/점선을 구분합니다.
+**[사용법]** * **교과서 모드 (직교):** 왜곡 없이 정직한 모양을 보여줍니다. (길이, 각도 확인용)
+* **현실 모드 (원근):** 가까운 건 크게, 먼 건 작게 보입니다. (입체감 확인용)
 """)
 
 # --- 1. 사이드바 설정 ---
-st.sidebar.header("1. 도형 선택")
+st.sidebar.header("1. 보기 설정")
+# [핵심] 투영 방식 선택 스위치 추가
+projection_mode = st.sidebar.radio(
+    "투영 방식 (카메라 렌즈)", 
+    ["교과서 모드 (직교 투영)", "현실 모드 (원근 투영)"],
+    index=0
+)
+
+st.sidebar.header("2. 도형 선택")
 category = st.sidebar.radio("카테고리", ["각기둥/각뿔/각뿔대", "원기둥/원뿔 (다각형 근사)", "정다면체"])
 
-st.sidebar.header("2. 도형 회전")
+st.sidebar.header("3. 도형 회전")
 rot_x = st.sidebar.slider("X축 회전", 0, 360, 20)
 rot_y = st.sidebar.slider("Y축 회전", 0, 360, 30)
 rot_z = st.sidebar.slider("Z축 회전", 0, 360, 0)
@@ -66,38 +74,37 @@ elif category == "정다면체":
             for j in [-1,1]: points.extend([[0,i,j*phi], [j*phi,0,i], [i,j*phi,0]])
 points = np.array(points)
 
-# --- 4. 렌더링 로직 (원근법 알고리즘 적용) ---
+# --- 4. 렌더링 로직 (모드에 따라 분기) ---
 rotated_points = rotate_points(points, rot_x, rot_y, rot_z)
 hull = ConvexHull(rotated_points)
 
-# 법선 벡터 정규화
+# 법선 벡터 계산 및 정규화
 normals = []
 for eq in hull.equations:
     n = eq[:3]
     normals.append(n / np.linalg.norm(n))
 normals = np.array(normals)
 
-# [핵심] 원근법에 맞춘 '보이는 면' 판별 로직
-# 카메라가 (0, 0, 10) 위치에 있다고 가정 (Plotly 기본 뷰와 비슷하게 설정)
-camera_pos = np.array([0, 0, 10.0]) 
-
+# [가시성 판단 로직 분기]
+# 1. 교과서 모드 (Orthographic): 평행한 빛 (Z축 방향)
+# 2. 현실 모드 (Perspective): 카메라 시점 (0,0,10)에서 발사
+camera_pos = np.array([0, 0, 10.0])
 visible_faces_mask = []
-for i, simplex in enumerate(hull.simplices):
-    # 1. 면의 중심점(Centroid) 계산
-    face_points = rotated_points[simplex]
-    face_center = np.mean(face_points, axis=0)
-    
-    # 2. 시선 벡터 (카메라 -> 면의 중심)
-    view_vector = face_center - camera_pos
-    
-    # 3. 내적 계산 (시선 벡터와 법선 벡터의 각도)
-    # view_vector와 normal의 내적이 0보다 작아야 면이 카메라를 향해 있는 것임
-    # (카메라가 면을 쳐다볼 때, 면의 법선은 반대로 튀어나오므로 내적이 음수여야 보임)
-    dot_prod = np.dot(view_vector, normals[i])
-    
-    visible_faces_mask.append(dot_prod < 0)
 
-# (이하 로직은 동일: 엣지 매핑 및 Coplanar 제거)
+for i, simplex in enumerate(hull.simplices):
+    if "교과서 모드" in projection_mode:
+        # 직교 투영: 단순히 법선의 Z값이 양수면 보임
+        is_visible = normals[i][2] > 0
+    else:
+        # 원근 투영: 시선 벡터와 법선의 내적 이용
+        face_points = rotated_points[simplex]
+        face_center = np.mean(face_points, axis=0)
+        view_vector = face_center - camera_pos
+        is_visible = np.dot(view_vector, normals[i]) < 0
+        
+    visible_faces_mask.append(is_visible)
+
+# 엣지 추출 및 대각선 제거 로직
 edge_to_faces = {}
 for face_idx, simplex in enumerate(hull.simplices):
     n_pts = len(simplex)
@@ -118,9 +125,8 @@ for edge, faces in edge_to_faces.items():
         f1, f2 = faces
         n1, n2 = normals[f1], normals[f2]
         
-        # 평평하면 대각선 제거
         if is_coplanar(n1, n2): continue 
-            
+        
         if visible_faces_mask[f1] or visible_faces_mask[f2]:
             visible_edges.add(edge)
         else:
@@ -175,16 +181,21 @@ if visible_mesh_indices:
         lighting=dict(ambient=0.8), hoverinfo='none', name='면'
     ))
 
-# [원근법 설정]
-# projection을 'perspective'로(기본값) 두고, 
-# eye(카메라 위치)를 로직 상의 camera_pos와 비율을 맞춤
+# [핵심] 카메라 설정 업데이트
+if "교과서 모드" in projection_mode:
+    proj_type = "orthographic"
+    cam_dist = 2.0
+else:
+    proj_type = "perspective"
+    cam_dist = 2.0
+
 fig.update_layout(
     scene=dict(
         xaxis=dict(visible=False), yaxis=dict(visible=False), zaxis=dict(visible=False),
-        aspectmode='data',
+        aspectmode='data', # 비율 고정 (매우 중요)
         camera=dict(
-            projection=dict(type='perspective'), # 원근법 활성화!
-            eye=dict(x=0, y=0, z=2.0), # 카메라 위치
+            projection=dict(type=proj_type), 
+            eye=dict(x=0, y=0, z=cam_dist),
             up=dict(x=0, y=1, z=0)
         )
     ),

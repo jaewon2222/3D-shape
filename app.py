@@ -5,8 +5,8 @@ from scipy.spatial import ConvexHull
 
 # --- 페이지 설정 ---
 st.set_page_config(page_title="수학 문제집 생성기", layout="wide")
-st.title("📐 수학 문제집 도형 생성기 (최종_진짜_수정.py)")
-st.caption("뒷면이 비치지 않도록 벡터 계산 방식을 완전히 교체했습니다.")
+st.title("💎 수학 문제집 도형 생성기 (크리스탈 스타일)")
+st.caption("반투명한 유리 재질에 조명 효과를 더해 점선이 은은하게 비칩니다.")
 
 # --- 1. 사이드바 설정 ---
 with st.sidebar:
@@ -56,7 +56,7 @@ elif category == "원기둥/원뿔/구 (매끈함)":
     
     if sub_type == "구":
         r = st.sidebar.slider("반지름", 1.0, 3.0, 2.0)
-        u_steps = 30; v_steps = 15
+        u_steps = 40; v_steps = 20 # 더 매끄럽게
         u = np.linspace(0, 2 * np.pi, u_steps)
         v = np.linspace(0, np.pi, v_steps)
         for theta in u:
@@ -97,35 +97,27 @@ try:
     rotated_points = rotate_points(points, rot_x, rot_y, rot_z)
     hull = ConvexHull(rotated_points)
     
-    # [수정됨] 법선 벡터를 Hull Equation에서 직접 가져옴 (가장 정확함)
-    # equations: [nx, ny, nz, d] where normal points OUTWARDS
     normals = []
     for eq in hull.equations:
-        # 정규화된 법선 벡터 추출
         n_vec = eq[:3] 
         normals.append(n_vec) 
     normals = np.array(normals)
 
-    # [수정됨] 카메라 위치 설정
-    # 원근 투영일 때 카메라를 너무 가까이 두면 왜곡됨. 적당히 멀리(z=10) 둠.
-    # 교과서 모드는 z=무한대 (벡터 [0,0,1])
     if "교과서 모드" in projection_mode:
         view_mode = "ortho"
+        camera_pos = np.array([0, 0, 1000.0])
     else:
         view_mode = "perspective"
-        camera_pos = np.array([0, 0, 10.0]) # 8.0 -> 10.0 (안전거리 확보)
+        camera_pos = np.array([0, 0, 10.0])
 
     visible_faces_mask = []
     for i, simplex in enumerate(hull.simplices):
         if view_mode == "ortho":
-            # 직교 투영: Z값이 양수면 보임
             is_visible = normals[i][2] > 0
         else:
-            # 원근 투영: (카메라 - 면의중심) • 법선 > 0
             face_center = np.mean(rotated_points[simplex], axis=0)
             view_vector = camera_pos - face_center
             is_visible = np.dot(view_vector, normals[i]) > 0
-            
         visible_faces_mask.append(is_visible)
 
     edge_to_faces = {}
@@ -152,26 +144,16 @@ try:
             is_flat_internal = dot_val > 0.999 
 
             if is_curved_surface and is_smooth_edge:
-                # 곡면 실루엣: 한 면은 보이고 한 면은 안 보일 때만 그림
-                if v1 != v2:
-                    visible_edges.add(edge)
+                if v1 != v2: visible_edges.add(edge)
             else:
                 if is_flat_internal: continue
-                
-                # 각진 모서리: 둘 중 하나라도 보이면 '보이는 선'
-                # 단, 원근 모드에서 뒷면이 뚫려 보이는 문제 방지:
-                # v1, v2 둘 다 True여야 확실히 보이는 선이지만, 
-                # 외곽선(Silhouette)은 v1!=v2일 때임.
-                if v1 or v2:
-                    visible_edges.add(edge)
-                else:
-                    hidden_edges.add(edge)
+                if v1 or v2: visible_edges.add(edge)
+                else: hidden_edges.add(edge)
         else:
-            # 면이 하나뿐인 경우 (거의 없음)
             if any(visible_faces_mask[f] for f in faces): visible_edges.add(edge)
             else: hidden_edges.add(edge)
 
-    # --- 6. 시각화 ---
+    # --- 6. 시각화 (스타일 업그레이드) ---
     fig = go.Figure()
 
     def get_coords(edge_set):
@@ -183,37 +165,46 @@ try:
             z_list.extend([pts[0][2], pts[1][2], None])
         return x_list, y_list, z_list
 
-    # 숨은 선 (진한 회색, 점선)
+    # 1. 숨은 선 (뒤에 있으므로 먼저 그림)
     xh, yh, zh = get_coords(hidden_edges)
     fig.add_trace(go.Scatter3d(
         x=xh, y=yh, z=zh, mode='lines',
-        line=dict(color='rgb(100, 100, 100)', width=4, dash='dash'),
+        line=dict(color='rgb(120, 120, 120)', width=3, dash='dash'),
         name='숨은 선', hoverinfo='none'
     ))
 
-    # 보이는 선 (검정, 실선)
+    # 2. 면 채우기 (반투명 + 조명 효과)
+    # 모든 면을 다 그립니다 (투명하니까 뒷면도 보여야 함)
+    # 하지만 시각적 깔끔함을 위해 '보이는 면'만 그리는 것이 보통 더 예쁩니다.
+    # 사용자가 '뒷면 비침'을 원했으므로 visible_faces_mask를 사용하되, opacity로 조절합니다.
+    
+    # 전체 면 인덱스 가져오기 (ConvexHull의 모든 면 사용)
+    all_mesh_indices = hull.simplices 
+    
+    fig.add_trace(go.Mesh3d(
+        x=rotated_points[:,0], y=rotated_points[:,1], z=rotated_points[:,2],
+        i=all_mesh_indices[:,0], j=all_mesh_indices[:,1], k=all_mesh_indices[:,2],
+        color='#A5D8DD',    # 은은한 민트 블루 (Soft Blue)
+        opacity=0.3,        # 반투명 (30%)
+        flatshading=False,  # 부드러운 곡면 처리
+        lighting=dict(
+            ambient=0.7,    # 그림자 지지 않게 밝게 (음영 제거)
+            diffuse=0.5,    # 입체감 살짝
+            specular=1.3,   # 반짝이는 하이라이트 (조명 효과)
+            roughness=0.1,  # 매끈한 유리 재질
+            fresnel=0.5     # 가장자리가 빛나는 효과
+        ),
+        lightposition=dict(x=100, y=200, z=500), # 조명 위치
+        hoverinfo='none', name='면'
+    ))
+
+    # 3. 보이는 선 (맨 위에 그림)
     xv, yv, zv = get_coords(visible_edges)
     fig.add_trace(go.Scatter3d(
         x=xv, y=yv, z=zv, mode='lines',
-        line=dict(color='black', width=6),
+        line=dict(color='black', width=5),
         name='보이는 선', hoverinfo='none'
     ))
-
-    # 면 채우기 (흰색, 불투명도 높임)
-    # 뒷면이 비치는 것을 시각적으로 막기 위해 opacity를 1.0에 가깝게 하거나
-    # lighting 효과를 줍니다.
-    visible_mesh_indices = [hull.simplices[i] for i, vis in enumerate(visible_faces_mask) if vis]
-    
-    if visible_mesh_indices:
-        visible_mesh_indices = np.array(visible_mesh_indices)
-        fig.add_trace(go.Mesh3d(
-            x=rotated_points[:,0], y=rotated_points[:,1], z=rotated_points[:,2],
-            i=visible_mesh_indices[:,0], j=visible_mesh_indices[:,1], k=visible_mesh_indices[:,2],
-            color='white', 
-            opacity=0.8, # 면을 좀 더 불투명하게 해서 뒤쪽 선이 가려지는 효과 강화
-            lighting=dict(ambient=0.7, diffuse=0.5, specular=0.1),
-            hoverinfo='none', name='면'
-        ))
 
     proj_type = "orthographic" if "교과서 모드" in projection_mode else "perspective"
     
@@ -224,7 +215,7 @@ try:
             aspectmode='data',
             camera=dict(
                 projection=dict(type=proj_type), 
-                eye=dict(x=0, y=0, z=1.8), # 카메라 위치를 조금 더 당김
+                eye=dict(x=0, y=0, z=1.8),
                 up=dict(x=0, y=1, z=0)
             )
         ),

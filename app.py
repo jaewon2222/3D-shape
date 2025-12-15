@@ -3,11 +3,11 @@ import plotly.graph_objects as go
 import numpy as np
 from scipy.spatial import ConvexHull
 
-st.set_page_config(page_title="진짜 깔끔한 겨냥도", layout="wide")
-st.title("📐 3D 입체도형 관측소 (대각선 제거 버전)")
+st.set_page_config(page_title="완벽한 겨냥도 v3", layout="wide")
+st.title("📐 3D 입체도형 관측소 (대각선 완벽 제거판)")
 st.markdown("""
-**[수정 완료]** 이전 코드에서 발생하던 **'면이 쪼개지는 현상(대각선)'을 완벽하게 제거**했습니다.
-이제 사각형은 깨끗한 사각형으로 보입니다.
+**[최종 수정]** '엣지 트래킹' 방식을 도입하여 평면 위의 불필요한 대각선을 강제로 삭제했습니다.
+이제 사각기둥의 옆면이 깨끗한 직사각형으로 보일 것입니다.
 """)
 
 # --- 1. 사이드바 설정 ---
@@ -66,69 +66,80 @@ elif category == "정다면체":
             for j in [-1,1]: points.extend([[0,i,j*phi], [j*phi,0,i], [i,j*phi,0]])
 points = np.array(points)
 
-# --- 4. 렌더링 로직 (대각선 제거 핵심) ---
+# --- 4. 핵심 렌더링 로직 (완전 개편) ---
 rotated_points = rotate_points(points, rot_x, rot_y, rot_z)
 hull = ConvexHull(rotated_points)
 normals = hull.equations[:, :3]
 
-# (1) 면 가시성 확인 (내적 > 0 이면 보임)
-# 부동소수점 오차를 고려해 1e-4보다 크면 보이는 것으로 처리
+# (1) 각 면이 보이는지 판단 (앞면/뒷면)
 visible_faces_mask = [normal[2] > 1e-4 for normal in normals]
 
-visible_edges = set()
-hidden_edges = set()
-visible_mesh_indices = []
+# (2) 모든 엣지를 수집하고 공유하는 면들을 기록
+# edge_to_faces = { (p1_idx, p2_idx) : [face_idx1, face_idx2, ...] }
+edge_to_faces = {}
 
-# (2) Coplanar Check 함수: 두 면이 평평하게 이어져 있는지 확인
+for face_idx, simplex in enumerate(hull.simplices):
+    n_pts = len(simplex)
+    for k in range(n_pts):
+        p1, p2 = sorted((simplex[k], simplex[(k+1)%n_pts])) # 점 인덱스 정렬해서 키로 사용
+        edge = (p1, p2)
+        if edge not in edge_to_faces:
+            edge_to_faces[edge] = []
+        edge_to_faces[edge].append(face_idx)
+
+# (3) 평면 판별 함수
 def is_coplanar(n1, n2):
-    # 정규화
     norm1 = np.linalg.norm(n1)
     norm2 = np.linalg.norm(n2)
     if norm1 == 0 or norm2 == 0: return False
-    # 내적(cos theta) 구하기
     dot = np.dot(n1, n2) / (norm1 * norm2)
-    # 1에 가까우면(각도 0도) 같은 평면임 -> True 반환
-    return dot > 0.999 
+    return dot > 0.999 # 거의 평행하면 True
 
-# ConvexHull은 모든 면을 삼각형으로 쪼갭니다.
-# 각 삼각형(Simplex)을 순회하며 선을 그릴지 말지 결정합니다.
-for i, simplex in enumerate(hull.simplices):
-    
-    # 1. 면 채우기용 (보이는 면만 리스트에 담음)
-    if visible_faces_mask[i]:
-        visible_mesh_indices.append(simplex)
+visible_edges = set()
+hidden_edges = set()
 
-    # 2. 선 그리기용 (이웃 면과 비교)
-    # 삼각형의 3개 변을 확인
-    for k in range(3):
-        # 현재 변을 이루는 두 점
-        p1, p2 = simplex[k], simplex[(k+1)%3]
-        edge = tuple(sorted((p1, p2))) # (작은수, 큰수)로 통일
+# (4) 엣지 분류 로직 (여기가 핵심!)
+for edge, faces in edge_to_faces.items():
+    # 엣지는 보통 2개의 면을 공유합니다.
+    if len(faces) == 2:
+        f1, f2 = faces
+        n1, n2 = normals[f1], normals[f2]
         
-        # 이 변을 공유하는 '이웃 면(Neighbor)'의 인덱스 찾기
-        neighbor_idx = hull.neighbors[i, k]
-        
-        # [핵심] 나와 이웃 면이 '같은 평면(Coplanar)'인가?
-        # 맞다면, 이건 컴퓨터가 임의로 그은 대각선이므로 그리지 말고 건너뜀(continue)
-        if is_coplanar(normals[i], normals[neighbor_idx]):
-            continue
+        # [핵심] 두 면이 평평하게 이어져 있으면(Coplanar), 이 엣지는 '가짜'입니다.
+        if is_coplanar(n1, n2):
+            continue # 그리지 않고 건너뜀!
             
-        # [선 분류] 대각선이 아니라면, 진짜 모서리임.
-        # 나(i) 혹은 이웃(neighbor) 중 하나라도 보이면 -> 실선
-        is_me_visible = visible_faces_mask[i]
-        is_neighbor_visible = visible_faces_mask[neighbor_idx]
+        # 평평하지 않다면 '진짜 모서리'입니다. 이제 실선/점선 구분
+        v1 = visible_faces_mask[f1]
+        v2 = visible_faces_mask[f2]
         
-        if is_me_visible or is_neighbor_visible:
-            # 하나라도 보이면 실선 (Visible)
-            if edge in hidden_edges: hidden_edges.remove(edge)
+        if v1 or v2: 
+            # 둘 중 하나라도 보이면 실선
             visible_edges.add(edge)
         else:
-            # 둘 다 안 보여야 점선 (Hidden)
-            # 단, 이미 실선으로 등록된 녀석은 건드리지 않음
-            if edge not in visible_edges:
-                hidden_edges.add(edge)
+            # 둘 다 안 보이면 점선
+            hidden_edges.add(edge)
+            
+    else:
+        # 면을 1개만 공유하거나 3개 이상 공유하는 특이 케이스 (보통 외곽선)
+        # 해당 면이 보이면 실선, 아니면 점선
+        is_visible = False
+        for f in faces:
+            if visible_faces_mask[f]:
+                is_visible = True
+                break
+        if is_visible:
+            visible_edges.add(edge)
+        else:
+            hidden_edges.add(edge)
 
-# --- 5. 시각화 그리기 ---
+# (5) 채울 면 수집 (보이는 면만)
+visible_mesh_indices = []
+for i, is_vis in enumerate(visible_faces_mask):
+    if is_vis:
+        visible_mesh_indices.append(hull.simplices[i])
+
+# --- 5. 시각화 ---
 fig = go.Figure()
 
 # (1) 숨은 선 (점선)
@@ -159,13 +170,13 @@ fig.add_trace(go.Scatter3d(
     name='보이는 선', hoverinfo='none'
 ))
 
-# (3) 면 채우기 (보이는 면만)
+# (3) 면 채우기
 if visible_mesh_indices:
     visible_mesh_indices = np.array(visible_mesh_indices)
     fig.add_trace(go.Mesh3d(
         x=rotated_points[:,0], y=rotated_points[:,1], z=rotated_points[:,2],
         i=visible_mesh_indices[:,0], j=visible_mesh_indices[:,1], k=visible_mesh_indices[:,2],
-        color='#dceefc', opacity=0.5, # 반투명 하늘색
+        color='#dceefc', opacity=0.5,
         lighting=dict(ambient=0.8), hoverinfo='none', name='면'
     ))
 

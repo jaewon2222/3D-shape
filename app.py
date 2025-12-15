@@ -3,24 +3,24 @@ import plotly.graph_objects as go
 import numpy as np
 from scipy.spatial import ConvexHull
 
-st.set_page_config(page_title="궁극의 입체도형", layout="wide")
-st.title("📐 3D 입체도형 관측소 (투영 모드 선택)")
+st.set_page_config(page_title="궁극의 도형 관측소", layout="wide")
+st.title("📐 3D 입체도형 관측소 (원기둥/원뿔 매끈하게 수정)")
 st.markdown("""
-**[사용법]** * **교과서 모드 (직교):** 왜곡 없이 정직한 모양을 보여줍니다. (길이, 각도 확인용)
-* **현실 모드 (원근):** 가까운 건 크게, 먼 건 작게 보입니다. (입체감 확인용)
+**[최종 수정 내용]**
+1. **원기둥/원뿔 개선:** 더 이상 30각형처럼 보이지 않습니다. 곡면 내부의 불필요한 선을 지우고 **윤곽선(Silhouette)**만 남겨 매끈하게 표현합니다.
+2. **투영 모드:** 교과서 모드(직교)와 현실 모드(원근) 완벽 지원.
 """)
 
 # --- 1. 사이드바 설정 ---
 st.sidebar.header("1. 보기 설정")
-# [핵심] 투영 방식 선택 스위치 추가
 projection_mode = st.sidebar.radio(
-    "투영 방식 (카메라 렌즈)", 
+    "투영 방식", 
     ["교과서 모드 (직교 투영)", "현실 모드 (원근 투영)"],
     index=0
 )
 
 st.sidebar.header("2. 도형 선택")
-category = st.sidebar.radio("카테고리", ["각기둥/각뿔/각뿔대", "원기둥/원뿔 (다각형 근사)", "정다면체"])
+category = st.sidebar.radio("카테고리", ["각기둥/각뿔/각뿔대", "원기둥/원뿔 (매끈함)", "정다면체"])
 
 st.sidebar.header("3. 도형 회전")
 rot_x = st.sidebar.slider("X축 회전", 0, 360, 20)
@@ -37,6 +37,8 @@ def rotate_points(points, rx, ry, rz):
 
 # --- 3. 도형 데이터 생성 ---
 points = []
+is_smooth_surface = False # 원기둥/원뿔인 경우 True로 설정
+
 if category == "각기둥/각뿔/각뿔대":
     sub_type = st.sidebar.selectbox("종류", ["각기둥", "각뿔", "각뿔대"])
     n = st.sidebar.number_input("n (각형)", 3, 20, 4)
@@ -48,9 +50,10 @@ if category == "각기둥/각뿔/각뿔대":
     for t in theta: points.append([rt*np.cos(t), rt*np.sin(t), h/2])
     for t in theta: points.append([rb*np.cos(t), rb*np.sin(t), -h/2])
 
-elif category == "원기둥/원뿔 (다각형 근사)":
+elif category == "원기둥/원뿔 (매끈함)":
+    is_smooth_surface = True # [중요] 매끈한 처리 활성화
     sub_type = st.sidebar.selectbox("종류", ["원기둥", "원뿔", "원뿔대"])
-    n = 30 
+    n = 60 # 더 부드럽게 하기 위해 점 개수 증가
     h = 4.0; rb = 2.0
     if sub_type == "원기둥": rt = rb
     elif sub_type == "원뿔": rt = 0.001
@@ -74,37 +77,31 @@ elif category == "정다면체":
             for j in [-1,1]: points.extend([[0,i,j*phi], [j*phi,0,i], [i,j*phi,0]])
 points = np.array(points)
 
-# --- 4. 렌더링 로직 (모드에 따라 분기) ---
+# --- 4. 렌더링 로직 ---
 rotated_points = rotate_points(points, rot_x, rot_y, rot_z)
 hull = ConvexHull(rotated_points)
 
-# 법선 벡터 계산 및 정규화
+# 법선 벡터 계산
 normals = []
 for eq in hull.equations:
-    n = eq[:3]
-    normals.append(n / np.linalg.norm(n))
+    n_vec = eq[:3]
+    normals.append(n_vec / np.linalg.norm(n_vec))
 normals = np.array(normals)
 
-# [가시성 판단 로직 분기]
-# 1. 교과서 모드 (Orthographic): 평행한 빛 (Z축 방향)
-# 2. 현실 모드 (Perspective): 카메라 시점 (0,0,10)에서 발사
+# 가시성 판단 (투영 모드에 따라)
 camera_pos = np.array([0, 0, 10.0])
 visible_faces_mask = []
 
 for i, simplex in enumerate(hull.simplices):
     if "교과서 모드" in projection_mode:
-        # 직교 투영: 단순히 법선의 Z값이 양수면 보임
         is_visible = normals[i][2] > 0
     else:
-        # 원근 투영: 시선 벡터와 법선의 내적 이용
-        face_points = rotated_points[simplex]
-        face_center = np.mean(face_points, axis=0)
+        face_center = np.mean(rotated_points[simplex], axis=0)
         view_vector = face_center - camera_pos
         is_visible = np.dot(view_vector, normals[i]) < 0
-        
     visible_faces_mask.append(is_visible)
 
-# 엣지 추출 및 대각선 제거 로직
+# --- 엣지 분류 및 매끈한 처리 로직 ---
 edge_to_faces = {}
 for face_idx, simplex in enumerate(hull.simplices):
     n_pts = len(simplex)
@@ -117,6 +114,10 @@ for face_idx, simplex in enumerate(hull.simplices):
 def is_coplanar(n1, n2):
     return np.dot(n1, n2) > 0.999
 
+# [핵심] 옆면인지 판단하는 함수 (법선의 z성분이 작으면 옆면)
+def is_side_face(normal):
+    return abs(normal[2]) < 0.9 # 위/아래 뚜껑이 아니면 옆면으로 간주
+
 visible_edges = set()
 hidden_edges = set()
 
@@ -124,16 +125,26 @@ for edge, faces in edge_to_faces.items():
     if len(faces) == 2:
         f1, f2 = faces
         n1, n2 = normals[f1], normals[f2]
+        v1, v2 = visible_faces_mask[f1], visible_faces_mask[f2]
         
+        # 1. 완전 평면(사각형 내부 대각선) 제거
         if is_coplanar(n1, n2): continue 
         
-        if visible_faces_mask[f1] or visible_faces_mask[f2]:
+        # 2. [곡면 처리] 원기둥/원뿔일 때, 옆면끼리의 경계선 지우기
+        if is_smooth_surface:
+            # 두 면이 모두 옆면이고, 둘 다 보이는 상태라면 -> 그리지 않음 (매끈하게)
+            # 단, 하나는 보이고 하나는 안 보이면(실루엣) -> 그림
+            if is_side_face(n1) and is_side_face(n2):
+                if v1 and v2: continue # 곡면 내부의 선 삭제!
+        
+        # 3. 선 분류 (보이는 선 vs 숨은 선)
+        if v1 or v2:
             visible_edges.add(edge)
         else:
             hidden_edges.add(edge)
     else:
-        is_visible = any(visible_faces_mask[f] for f in faces)
-        if is_visible: visible_edges.add(edge)
+        # 경계선 예외 처리
+        if any(visible_faces_mask[f] for f in faces): visible_edges.add(edge)
         else: hidden_edges.add(edge)
 
 visible_mesh_indices = []
@@ -143,7 +154,7 @@ for i, is_vis in enumerate(visible_faces_mask):
 # --- 5. 시각화 ---
 fig = go.Figure()
 
-# 숨은 선
+# 숨은 선 (원기둥일 때 너무 지저분하면 투명도 조절 가능)
 x_dash, y_dash, z_dash = [], [], []
 for p1, p2 in hidden_edges:
     pts = rotated_points[[p1, p2]]
@@ -153,7 +164,7 @@ for p1, p2 in hidden_edges:
 
 fig.add_trace(go.Scatter3d(
     x=x_dash, y=y_dash, z=z_dash, mode='lines',
-    line=dict(color='gray', width=3, dash='dash'),
+    line=dict(color='lightgray', width=3, dash='dash'), # 색을 조금 연하게
     name='숨은 선', hoverinfo='none'
 ))
 
@@ -178,21 +189,22 @@ if visible_mesh_indices:
         x=rotated_points[:,0], y=rotated_points[:,1], z=rotated_points[:,2],
         i=visible_mesh_indices[:,0], j=visible_mesh_indices[:,1], k=visible_mesh_indices[:,2],
         color='#dceefc', opacity=0.5,
-        lighting=dict(ambient=0.8), hoverinfo='none', name='면'
+        lighting=dict(ambient=0.6, diffuse=0.9, roughness=0.1, specular=0.3), # 조명 효과 강화
+        hoverinfo='none', name='면'
     ))
 
-# [핵심] 카메라 설정 업데이트
+# 카메라 설정
 if "교과서 모드" in projection_mode:
     proj_type = "orthographic"
     cam_dist = 2.0
 else:
     proj_type = "perspective"
-    cam_dist = 2.0
+    cam_dist = 2.5
 
 fig.update_layout(
     scene=dict(
         xaxis=dict(visible=False), yaxis=dict(visible=False), zaxis=dict(visible=False),
-        aspectmode='data', # 비율 고정 (매우 중요)
+        aspectmode='data',
         camera=dict(
             projection=dict(type=proj_type), 
             eye=dict(x=0, y=0, z=cam_dist),

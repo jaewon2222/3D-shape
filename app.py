@@ -5,8 +5,8 @@ from scipy.spatial import ConvexHull
 
 # --- 페이지 설정 ---
 st.set_page_config(page_title="수학 문제집 생성기", layout="wide")
-st.title("💎 수학 문제집 도형 생성기 (크리스탈 스타일)")
-st.caption("반투명한 유리 재질에 조명 효과를 더해 점선이 은은하게 비칩니다.")
+st.title("💎 수학 문제집 도형 생성기 (고화질 스무스 버전)")
+st.caption("해상도를 높이고 부드러운 쉐이딩을 적용하여 깨짐 현상을 없앴습니다.")
 
 # --- 1. 사이드바 설정 ---
 with st.sidebar:
@@ -34,7 +34,7 @@ def rotate_points(points, rx, ry, rz):
     mat_z = np.array([[np.cos(rad_z), -np.sin(rad_z), 0], [np.sin(rad_z), np.cos(rad_z), 0], [0, 0, 1]])
     return points @ mat_x.T @ mat_y.T @ mat_z.T
 
-# --- 3. 도형 데이터 생성 ---
+# --- 3. 도형 데이터 생성 (고해상도 적용) ---
 points = []
 is_curved_surface = False 
 
@@ -56,7 +56,9 @@ elif category == "원기둥/원뿔/구 (매끈함)":
     
     if sub_type == "구":
         r = st.sidebar.slider("반지름", 1.0, 3.0, 2.0)
-        u_steps = 40; v_steps = 20 # 더 매끄럽게
+        # [수정] 해상도 대폭 증가 (깨짐 방지)
+        u_steps = 60 
+        v_steps = 30 
         u = np.linspace(0, 2 * np.pi, u_steps)
         v = np.linspace(0, np.pi, v_steps)
         for theta in u:
@@ -66,7 +68,8 @@ elif category == "원기둥/원뿔/구 (매끈함)":
                 z = r * np.cos(phi)
                 points.append([x, y, z])
     else:
-        n = 60 
+        # [수정] 원기둥 해상도 증가
+        n = 100 
         h = 4.0; rb = 2.0
         if sub_type == "원기둥": rt = rb
         elif sub_type == "원뿔": rt = 0.001
@@ -140,7 +143,8 @@ try:
             v1, v2 = visible_faces_mask[f1], visible_faces_mask[f2]
             
             dot_val = np.dot(n1, n2)
-            is_smooth_edge = dot_val > 0.8 
+            # 해상도가 높아지면 면 사이 각도가 매우 작아지므로 smooth 기준을 높임
+            is_smooth_edge = dot_val > 0.9  
             is_flat_internal = dot_val > 0.999 
 
             if is_curved_surface and is_smooth_edge:
@@ -153,7 +157,7 @@ try:
             if any(visible_faces_mask[f] for f in faces): visible_edges.add(edge)
             else: hidden_edges.add(edge)
 
-    # --- 6. 시각화 (스타일 업그레이드) ---
+    # --- 6. 시각화 (스무스 렌더링) ---
     fig = go.Figure()
 
     def get_coords(edge_set):
@@ -165,44 +169,46 @@ try:
             z_list.extend([pts[0][2], pts[1][2], None])
         return x_list, y_list, z_list
 
-    # 1. 숨은 선 (뒤에 있으므로 먼저 그림)
+    # 1. 숨은 선 (더 얇고 연하게)
     xh, yh, zh = get_coords(hidden_edges)
     fig.add_trace(go.Scatter3d(
         x=xh, y=yh, z=zh, mode='lines',
-        line=dict(color='rgb(120, 120, 120)', width=3, dash='dash'),
+        line=dict(color='rgb(150, 150, 150)', width=2, dash='dash'),
         name='숨은 선', hoverinfo='none'
     ))
 
-    # 2. 면 채우기 (반투명 + 조명 효과)
-    # 모든 면을 다 그립니다 (투명하니까 뒷면도 보여야 함)
-    # 하지만 시각적 깔끔함을 위해 '보이는 면'만 그리는 것이 보통 더 예쁩니다.
-    # 사용자가 '뒷면 비침'을 원했으므로 visible_faces_mask를 사용하되, opacity로 조절합니다.
-    
-    # 전체 면 인덱스 가져오기 (ConvexHull의 모든 면 사용)
+    # 2. 면 채우기 (그라데이션 & 스무스 쉐이딩)
     all_mesh_indices = hull.simplices 
+    
+    # 그라데이션을 위해 intensity 설정 (Z값 기준)
+    # 색상을 일정하게 하고 싶으면 intensity를 제거하고 color='...'만 쓰면 되지만,
+    # intensity를 쓰면 면의 경계가 덜 보여서 훨씬 매끄러워 보임.
+    z_values = rotated_points[:, 2]
     
     fig.add_trace(go.Mesh3d(
         x=rotated_points[:,0], y=rotated_points[:,1], z=rotated_points[:,2],
         i=all_mesh_indices[:,0], j=all_mesh_indices[:,1], k=all_mesh_indices[:,2],
-        color='#A5D8DD',    # 은은한 민트 블루 (Soft Blue)
-        opacity=0.3,        # 반투명 (30%)
-        flatshading=False,  # 부드러운 곡면 처리
+        intensity=z_values, # Z값에 따라 미세한 색상 변화 -> 경계선 숨김 효과
+        colorscale=[[0, '#A5D8DD'], [1, '#A5D8DD']], # 단일 색상 그라데이션 (매끄러움 유지용)
+        showscale=False,
+        opacity=0.35,       # 투명도
+        flatshading=False,  # [중요] True면 각져보임. False여야 부드러움.
         lighting=dict(
-            ambient=0.7,    # 그림자 지지 않게 밝게 (음영 제거)
-            diffuse=0.5,    # 입체감 살짝
-            specular=1.3,   # 반짝이는 하이라이트 (조명 효과)
-            roughness=0.1,  # 매끈한 유리 재질
-            fresnel=0.5     # 가장자리가 빛나는 효과
+            ambient=0.6,    
+            diffuse=0.5,    
+            specular=0.8,   # 반짝임
+            roughness=0.1,  
+            fresnel=1.0     # 외곽선 발광
         ),
-        lightposition=dict(x=100, y=200, z=500), # 조명 위치
+        lightposition=dict(x=100, y=100, z=1000), 
         hoverinfo='none', name='면'
     ))
 
-    # 3. 보이는 선 (맨 위에 그림)
+    # 3. 보이는 선 (깔끔하게)
     xv, yv, zv = get_coords(visible_edges)
     fig.add_trace(go.Scatter3d(
         x=xv, y=yv, z=zv, mode='lines',
-        line=dict(color='black', width=5),
+        line=dict(color='black', width=4),
         name='보이는 선', hoverinfo='none'
     ))
 

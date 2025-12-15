@@ -10,29 +10,30 @@ except ImportError:
     has_scipy = False
 
 st.set_page_config(page_title="3D 도형 관측기", layout="wide")
-st.title("📐 3D 입체도형 관측소 (겨냥도 기능)")
-st.markdown("설정에서 **'겨냥도 모드'**를 선택하면 뒷면의 모서리가 비쳐 보입니다.")
+st.title("📐 3D 입체도형 관측소 (겨냥도 강화)")
+st.markdown("설정에서 **'겨냥도 모드'**를 선택하면 면이 투명해지며 뒷면의 선이 뚜렷하게 보입니다.")
 
 # --- 사이드바 ---
 st.sidebar.header("설정")
 category = st.sidebar.radio("도형 카테고리", ["각기둥/각뿔/각뿔대", "원기둥/원뿔/원뿔대", "정다면체", "구"])
 
-# [추가된 기능] 보기 모드 선택
+# [보기 모드]
 st.sidebar.markdown("---")
 view_mode = st.sidebar.radio("보기 모드", ["일반 (불투명)", "겨냥도 (반투명)"])
 
 fig = go.Figure()
 
-# --- 설정값 ---
+# --- 설정값 조정 ---
 line_width = 8
 line_color = 'black'
 
-# 겨냥도 모드일 때 투명도를 낮춤
 if view_mode == "겨냥도 (반투명)":
-    mesh_opacity = 0.3  # 반투명
-    lighting_effects = dict(ambient=0.9, diffuse=0.5, roughness=0.1, specular=0.1) # 빛 반사 줄임
+    # 겨냥도: 면을 거의 안 보이게(0.1) 하고, 조명 효과도 줄여서 선을 강조
+    mesh_opacity = 0.1 
+    lighting_effects = dict(ambient=1.0, diffuse=0.1, roughness=0.1, specular=0.0)
 else:
-    mesh_opacity = 1.0  # 불투명
+    # 일반: 꽉 찬 느낌
+    mesh_opacity = 1.0
     lighting_effects = dict(ambient=0.7, diffuse=0.5, roughness=0.1, specular=0.2)
 
 
@@ -117,7 +118,7 @@ elif category == "원기둥/원뿔/원뿔대":
         if rt > 0: i.extend([idx]); j.extend([next_idx]); k.extend([2*n])
         if rb > 0: i.extend([n+idx]); j.extend([2*n+1]); k.extend([n+next_idx])
 
-    # 윤곽선 (옆면 선 없음)
+    # 윤곽선
     x_lines, y_lines, z_lines = [], [], []
     if rt > 0:
         x_lines.extend(list(x_top) + [x_top[0]] + [None])
@@ -126,6 +127,13 @@ elif category == "원기둥/원뿔/원뿔대":
     x_lines.extend(list(x_bot) + [x_bot[0]] + [None])
     y_lines.extend(list(y_bot) + [y_bot[0]] + [None])
     z_lines.extend([0]*(n+1) + [None])
+
+    # [수정] 겨냥도 느낌을 위해 원기둥 좌우 끝(실루엣) 라인 2개 추가
+    # 0도 지점과 180도 지점 (n//2)
+    for idx in [0, n//2]:
+        x_lines.extend([x_top[idx], x_bot[idx], None])
+        y_lines.extend([y_top[idx], y_bot[idx], None])
+        z_lines.extend([h, 0, None])
 
     fig.add_trace(go.Mesh3d(x=x, y=y, z=z, i=i, j=j, k=k, color='#FFD700', opacity=mesh_opacity, flatshading=True, lighting=lighting_effects, name='면'))
     fig.add_trace(go.Scatter3d(x=x_lines, y=y_lines, z=z_lines, mode='lines', line=dict(color=line_color, width=line_width), name='윤곽선'))
@@ -203,7 +211,7 @@ elif category == "구":
         x=x, y=y, z=z, 
         colorscale='Viridis', 
         lighting=lighting_effects,
-        opacity=mesh_opacity, # 구에도 투명도 적용
+        opacity=mesh_opacity, 
         showscale=False 
     ))
 

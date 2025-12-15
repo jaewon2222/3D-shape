@@ -5,8 +5,8 @@ from scipy.spatial import ConvexHull
 
 # --- 페이지 설정 ---
 st.set_page_config(page_title="수학 문제집 생성기", layout="wide")
-st.title("📐 수학 문제집 도형 생성기 (실루엣 알고리즘)")
-st.caption("교과서 스타일: 구(Sphere) 포함, 보이는 곡면은 외곽선만 그립니다.")
+st.title("📐 수학 문제집 도형 생성기 (최종 수정판)")
+st.caption("교과서 스타일: 원근 투영 시 뒷면이 비치는 문제를 해결했습니다.")
 
 # --- 1. 사이드바 설정 ---
 with st.sidebar:
@@ -60,7 +60,6 @@ elif category == "원기둥/원뿔/구 (매끈함)":
         v_steps = 15
         u = np.linspace(0, 2 * np.pi, u_steps)
         v = np.linspace(0, np.pi, v_steps)
-        
         for theta in u:
             for phi in v:
                 x = r * np.sin(phi) * np.cos(theta)
@@ -98,17 +97,45 @@ points = np.array(points)
 try:
     rotated_points = rotate_points(points, rot_x, rot_y, rot_z)
     hull = ConvexHull(rotated_points)
+    
+    # 도형의 중심 (법선 벡터 방향 교정용)
+    center_of_shape = np.mean(rotated_points, axis=0)
 
     normals = []
-    for eq in hull.equations:
-        n_vec = eq[:3]
-        normals.append(n_vec / np.linalg.norm(n_vec))
-    normals = np.array(normals)
-
-    camera_pos = np.array([0, 0, 100.0])
-    visible_faces_mask = []
-
+    valid_simplices = []
+    
     for i, simplex in enumerate(hull.simplices):
+        # 법선 계산
+        p0, p1, p2 = rotated_points[simplex[0]], rotated_points[simplex[1]], rotated_points[simplex[2]]
+        vec1 = p1 - p0
+        vec2 = p2 - p0
+        normal = np.cross(vec1, vec2)
+        norm_len = np.linalg.norm(normal)
+        if norm_len == 0: continue
+        normal /= norm_len
+        
+        # 법선이 바깥을 향하는지 확인 (중심에서 면으로 향하는 벡터와 내적)
+        # 내적이 양수여야 바깥임. 음수면 법선 뒤집기
+        face_center = np.mean(rotated_points[simplex], axis=0)
+        if np.dot(normal, face_center - center_of_shape) < 0:
+            normal = -normal
+            
+        normals.append(normal)
+        valid_simplices.append(simplex)
+    
+    normals = np.array(normals)
+    hull_simplices = np.array(valid_simplices) # 필터링된 면 정보
+
+    # [핵심 수정] 카메라 위치 설정
+    # 교과서 모드: Z축 무한대 (사실상 Z성분만 확인)
+    # 현실 모드: 도형 크기가 약 4.0이므로, 카메라는 z=6.0~8.0 정도로 가까이 둬야 시야각이 맞음
+    if "교과서 모드" in projection_mode:
+        camera_pos = np.array([0, 0, 10000.0]) 
+    else:
+        camera_pos = np.array([0, 0, 8.0]) # 100에서 8로 수정 (시야각 보정)
+
+    visible_faces_mask = []
+    for i, simplex in enumerate(hull_simplices):
         if "교과서 모드" in projection_mode:
             is_visible = normals[i][2] > 0
         else:
@@ -118,7 +145,7 @@ try:
         visible_faces_mask.append(is_visible)
 
     edge_to_faces = {}
-    for face_idx, simplex in enumerate(hull.simplices):
+    for face_idx, simplex in enumerate(hull_simplices):
         n_pts = len(simplex)
         for k in range(n_pts):
             p1, p2 = sorted((simplex[k], simplex[(k+1)%n_pts]))
@@ -126,7 +153,7 @@ try:
             if edge not in edge_to_faces: edge_to_faces[edge] = []
             edge_to_faces[edge].append(face_idx)
 
-    # --- 5. 선 그리기 로직 (수정된 부분) ---
+    # --- 5. 선 그리기 로직 ---
     visible_edges = set()
     hidden_edges = set()
 
@@ -140,21 +167,17 @@ try:
             is_smooth_edge = dot_val > 0.8 
             is_flat_internal = dot_val > 0.999 
 
-            # [문제의 구간 수정됨]
             if is_curved_surface and is_smooth_edge:
-                # 곡면 처리: 실루엣(경계선)만 그림
+                # 곡면 실루엣 처리
                 if v1 != v2:
                     visible_edges.add(edge)
             else:
-                # 각진 도형 처리
-                if is_flat_internal:
-                    continue
+                if is_flat_internal: continue
                 
                 if v1 or v2:
                     visible_edges.add(edge)
                 else:
                     hidden_edges.add(edge)
-
         else:
             if any(visible_faces_mask[f] for f in faces): visible_edges.add(edge)
             else: hidden_edges.add(edge)
@@ -171,7 +194,7 @@ try:
             z_list.extend([pts[0][2], pts[1][2], None])
         return x_list, y_list, z_list
 
-    # 숨은 선
+    # 숨은 선 (진한 점선)
     xh, yh, zh = get_coords(hidden_edges)
     fig.add_trace(go.Scatter3d(
         x=xh, y=yh, z=zh, mode='lines',
@@ -179,7 +202,7 @@ try:
         name='숨은 선', hoverinfo='none'
     ))
 
-    # 보이는 선
+    # 보이는 선 (실선)
     xv, yv, zv = get_coords(visible_edges)
     fig.add_trace(go.Scatter3d(
         x=xv, y=yv, z=zv, mode='lines',
@@ -188,7 +211,7 @@ try:
     ))
 
     # 면 채우기
-    visible_mesh_indices = [hull.simplices[i] for i, vis in enumerate(visible_faces_mask) if vis]
+    visible_mesh_indices = [hull_simplices[i] for i, vis in enumerate(visible_faces_mask) if vis]
     if visible_mesh_indices:
         visible_mesh_indices = np.array(visible_mesh_indices)
         fig.add_trace(go.Mesh3d(
@@ -220,4 +243,4 @@ try:
     st.plotly_chart(fig, use_container_width=True)
 
 except Exception as e:
-    st.error(f"오류가 발생했습니다: {e}")
+    st.error(f"오류: {e}")

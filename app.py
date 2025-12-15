@@ -1,230 +1,219 @@
 import streamlit as st
 import plotly.graph_objects as go
 import numpy as np
+from scipy.spatial import ConvexHull
 
-# --- Scipy 체크 ---
-try:
-    from scipy.spatial import ConvexHull
-    has_scipy = True
-except ImportError:
-    has_scipy = False
+st.set_page_config(page_title="진짜 겨냥도 생성기", layout="wide")
+st.title("📐 3D 입체도형 관측소 (Real-time 겨냥도)")
+st.markdown("""
+**마우스 드래그**는 단순히 카메라 위치만 바꿉니다.
+**반드시 왼쪽 사이드바의 [도형 회전] 슬라이더를 움직이세요.** 그래야 실선/점선이 수학적으로 다시 계산됩니다.
+""")
 
-st.set_page_config(page_title="3D 도형 관측기", layout="wide")
-st.title("📐 3D 입체도형 관측소 (겨냥도 강화)")
-st.markdown("설정에서 **'겨냥도 모드'**를 선택하면 면이 투명해지며 뒷면의 선이 뚜렷하게 보입니다.")
+# --- 사이드바 설정 ---
+st.sidebar.header("1. 도형 선택")
+category = st.sidebar.radio("카테고리", ["각기둥/각뿔/각뿔대", "원기둥/원뿔 (근사)", "정다면체"])
 
-# --- 사이드바 ---
-st.sidebar.header("설정")
-category = st.sidebar.radio("도형 카테고리", ["각기둥/각뿔/각뿔대", "원기둥/원뿔/원뿔대", "정다면체", "구"])
+st.sidebar.header("2. 도형 회전 (필수)")
+rot_x = st.sidebar.slider("X축 회전 (위아래)", 0, 360, 30)
+rot_y = st.sidebar.slider("Y축 회전 (좌우)", 0, 360, 45)
+# Z축은 겨냥도에서 큰 의미 없으므로 생략하거나 필요시 추가
 
-# [보기 모드]
-st.sidebar.markdown("---")
-view_mode = st.sidebar.radio("보기 모드", ["일반 (불투명)", "겨냥도 (반투명)"])
+# --- 수학 함수: 회전 행렬 ---
+def rotate_points(points, rx, ry):
+    # 라디안 변환
+    rad_x = np.radians(rx)
+    rad_y = np.radians(ry)
+    
+    # 회전 행렬 정의
+    mat_x = np.array([
+        [1, 0, 0],
+        [0, np.cos(rad_x), -np.sin(rad_x)],
+        [0, np.sin(rad_x), np.cos(rad_x)]
+    ])
+    mat_y = np.array([
+        [np.cos(rad_y), 0, np.sin(rad_y)],
+        [0, 1, 0],
+        [-np.sin(rad_y), 0, np.cos(rad_y)]
+    ])
+    
+    # Y축 회전 후 X축 회전 적용
+    rotated = points @ mat_y.T
+    rotated = rotated @ mat_x.T
+    return rotated
 
-fig = go.Figure()
+# --- 포인트 생성 로직 ---
+points = []
 
-# --- 설정값 조정 ---
-line_width = 8
-line_color = 'black'
-
-if view_mode == "겨냥도 (반투명)":
-    # 겨냥도: 면을 거의 안 보이게(0.1) 하고, 조명 효과도 줄여서 선을 강조
-    mesh_opacity = 0.1 
-    lighting_effects = dict(ambient=1.0, diffuse=0.1, roughness=0.1, specular=0.0)
-else:
-    # 일반: 꽉 찬 느낌
-    mesh_opacity = 1.0
-    lighting_effects = dict(ambient=0.7, diffuse=0.5, roughness=0.1, specular=0.2)
-
-
-# ========================================================
-# 1. 각기둥 / 각뿔 / 각뿔대
-# ========================================================
 if category == "각기둥/각뿔/각뿔대":
     sub_type = st.sidebar.selectbox("종류", ["각기둥", "각뿔", "각뿔대"])
     n = st.sidebar.number_input("n (각형)", 3, 20, 4)
-    h = st.sidebar.slider("높이", 1.0, 10.0, 5.0)
-    rb = st.sidebar.slider("밑면 반지름", 1.0, 5.0, 3.0)
-
+    h = 4.0
+    rb = 2.0
+    
     if sub_type == "각기둥": rt = rb
-    elif sub_type == "각뿔": rt = 0
-    else: rt = st.sidebar.slider("윗면 반지름", 0.1, rb-0.1, rb/2)
-
+    elif sub_type == "각뿔": rt = 0.001 # 0이면 ConvexHull 계산시 에러 가능성 있어 아주 작은 값
+    else: rt = st.sidebar.slider("윗면 반지름", 0.1, 1.9, 1.0)
+    
+    # 점 생성
     theta = np.linspace(0, 2*np.pi, n, endpoint=False)
-    x_bot = rb * np.cos(theta); y_bot = rb * np.sin(theta)
-    x_top = rt * np.cos(theta); y_top = rt * np.sin(theta)
-
-    x = np.concatenate([x_top, x_bot, [0], [0]])
-    y = np.concatenate([y_top, y_bot, [0], [0]])
-    z = np.concatenate([np.full(n, h), np.zeros(n), [h], [0]])
-
-    i, j, k = [], [], []
-    top_start, bot_start = 0, n
-    top_center, bot_center = 2*n, 2*n+1
-
-    for idx in range(n):
-        next_idx = (idx + 1) % n
-        i.extend([top_start + idx, top_start + idx])
-        j.extend([bot_start + idx, bot_start + next_idx])
-        k.extend([bot_start + next_idx, top_start + next_idx])
-        if rt > 0:
-            i.extend([top_start + idx]); j.extend([top_start + next_idx]); k.extend([top_center])
-        if rb > 0:
-            i.extend([bot_start + idx]); j.extend([bot_center]); k.extend([bot_start + next_idx])
-
-    # 윤곽선
-    x_lines, y_lines, z_lines = [], [], []
-    if rt > 0:
-        x_lines.extend(list(x_top) + [x_top[0]] + [None])
-        y_lines.extend(list(y_top) + [y_top[0]] + [None])
-        z_lines.extend([h]*(n+1) + [None])
-    x_lines.extend(list(x_bot) + [x_bot[0]] + [None])
-    y_lines.extend(list(y_bot) + [y_bot[0]] + [None])
-    z_lines.extend([0]*(n+1) + [None])
-    for idx in range(n):
-        x_lines.extend([x_top[idx], x_bot[idx], None])
-        y_lines.extend([y_top[idx], y_bot[idx], None])
-        z_lines.extend([h, 0, None])
-
-    fig.add_trace(go.Mesh3d(x=x, y=y, z=z, i=i, j=j, k=k, color='#00BFFF', opacity=mesh_opacity, flatshading=True, lighting=lighting_effects, name='면'))
-    fig.add_trace(go.Scatter3d(x=x_lines, y=y_lines, z=z_lines, mode='lines', line=dict(color=line_color, width=line_width), name='윤곽선'))
-
-
-# ========================================================
-# 2. 원기둥 / 원뿔 / 원뿔대
-# ========================================================
-elif category == "원기둥/원뿔/원뿔대":
+    # 윗면
+    for t in theta: points.append([rt*np.cos(t), rt*np.sin(t), h/2])
+    # 아랫면
+    for t in theta: points.append([rb*np.cos(t), rb*np.sin(t), -h/2])
+    
+elif category == "원기둥/원뿔 (근사)":
+    # 원기둥도 다각형으로 근사하여 처리 (n=40 정도면 충분히 원 같음)
     sub_type = st.sidebar.selectbox("종류", ["원기둥", "원뿔", "원뿔대"])
-    h = st.sidebar.slider("높이", 1.0, 10.0, 5.0)
-    rb = st.sidebar.slider("밑면 반지름", 1.0, 5.0, 3.0)
-    n = 60
-    
+    n = 40 
+    h = 4.0
+    rb = 2.0
     if sub_type == "원기둥": rt = rb
-    elif sub_type == "원뿔": rt = 0
-    else: rt = st.sidebar.slider("윗면 반지름", 0.1, rb-0.1, rb/2)
-
-    theta = np.linspace(0, 2*np.pi, n, endpoint=False)
-    x_bot = rb * np.cos(theta); y_bot = rb * np.sin(theta)
-    x_top = rt * np.cos(theta); y_top = rt * np.sin(theta)
-
-    x = np.concatenate([x_top, x_bot, [0], [0]])
-    y = np.concatenate([y_top, y_bot, [0], [0]])
-    z = np.concatenate([np.full(n, h), np.zeros(n), [h], [0]])
-
-    i, j, k = [], [], []
-    for idx in range(n):
-        next_idx = (idx + 1) % n
-        i.extend([idx, idx]); j.extend([n + idx, n + next_idx]); k.extend([n + next_idx, next_idx])
-        if rt > 0: i.extend([idx]); j.extend([next_idx]); k.extend([2*n])
-        if rb > 0: i.extend([n+idx]); j.extend([2*n+1]); k.extend([n+next_idx])
-
-    # 윤곽선
-    x_lines, y_lines, z_lines = [], [], []
-    if rt > 0:
-        x_lines.extend(list(x_top) + [x_top[0]] + [None])
-        y_lines.extend(list(y_top) + [y_top[0]] + [None])
-        z_lines.extend([h]*(n+1) + [None])
-    x_lines.extend(list(x_bot) + [x_bot[0]] + [None])
-    y_lines.extend(list(y_bot) + [y_bot[0]] + [None])
-    z_lines.extend([0]*(n+1) + [None])
-
-    # [수정] 겨냥도 느낌을 위해 원기둥 좌우 끝(실루엣) 라인 2개 추가
-    # 0도 지점과 180도 지점 (n//2)
-    for idx in [0, n//2]:
-        x_lines.extend([x_top[idx], x_bot[idx], None])
-        y_lines.extend([y_top[idx], y_bot[idx], None])
-        z_lines.extend([h, 0, None])
-
-    fig.add_trace(go.Mesh3d(x=x, y=y, z=z, i=i, j=j, k=k, color='#FFD700', opacity=mesh_opacity, flatshading=True, lighting=lighting_effects, name='면'))
-    fig.add_trace(go.Scatter3d(x=x_lines, y=y_lines, z=z_lines, mode='lines', line=dict(color=line_color, width=line_width), name='윤곽선'))
-
-# ========================================================
-# 3. 정다면체
-# ========================================================
-elif category == "정다면체":
-    if not has_scipy:
-        st.error("Scipy가 필요합니다.")
-    else:
-        sub_type = st.sidebar.selectbox("도형", ["정사면체", "정육면체", "정팔면체", "정십이면체", "정이십면체"])
-        size = st.sidebar.slider("크기", 1.0, 5.0, 3.0)
-        phi = (1 + np.sqrt(5)) / 2
-        points = []
-
-        if sub_type == "정사면체": points = [[1,1,1], [1,-1,-1], [-1,1,-1], [-1,-1,1]]
-        elif sub_type == "정육면체":
-            for x in [-1,1]:
-                for y in [-1,1]:
-                    for z in [-1,1]: points.append([x,y,z])
-        elif sub_type == "정팔면체": points = [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]]
-        elif sub_type == "정십이면체":
-            for x in [-1,1]:
-                for y in [-1,1]:
-                    for z in [-1,1]: points.append([x,y,z])
-            for i in [-1,1]:
-                for j in [-1,1]: points.extend([[0,i*phi,j/phi], [j/phi,0,i*phi], [i*phi,j/phi,0]])
-        elif sub_type == "정이십면체":
-            for i in [-1,1]:
-                for j in [-1,1]: points.extend([[0,i,j*phi], [j*phi,0,i], [i,j*phi,0]])
-
-        points = np.array(points) * size
-        hull = ConvexHull(points) 
-        
-        edges = set()
-        for simplex in hull.simplices:
-            edges.add(tuple(sorted((simplex[0], simplex[1]))))
-            edges.add(tuple(sorted((simplex[1], simplex[2]))))
-            edges.add(tuple(sorted((simplex[2], simplex[0]))))
-            
-        x_lines, y_lines, z_lines = [], [], []
-        min_dist = float('inf')
-        edge_list = list(edges)
-        distances = []
-        
-        for p1_idx, p2_idx in edge_list:
-            dist = np.linalg.norm(points[p1_idx] - points[p2_idx])
-            distances.append(dist)
-            if dist < min_dist: min_dist = dist
-        
-        for i, (p1_idx, p2_idx) in enumerate(edge_list):
-            if abs(distances[i] - min_dist) < 0.01:
-                x_lines.extend([points[p1_idx][0], points[p2_idx][0], None])
-                y_lines.extend([points[p1_idx][1], points[p2_idx][1], None])
-                z_lines.extend([points[p1_idx][2], points[p2_idx][2], None])
-
-        fig.add_trace(go.Mesh3d(x=points[:,0], y=points[:,1], z=points[:,2], 
-                                i=hull.simplices[:,0], j=hull.simplices[:,1], k=hull.simplices[:,2], 
-                                color='#FF8800', opacity=mesh_opacity, flatshading=True, lighting=lighting_effects))
-        
-        fig.add_trace(go.Scatter3d(x=x_lines, y=y_lines, z=z_lines, mode='lines', line=dict(color=line_color, width=line_width), name='윤곽선'))
-
-# ========================================================
-# 4. 구
-# ========================================================
-elif category == "구":
-    r = st.sidebar.slider("반지름", 1.0, 5.0, 3.0)
-    phi, theta = np.meshgrid(np.linspace(0, 2*np.pi, 60), np.linspace(0, np.pi, 60))
-    x = r * np.sin(theta) * np.cos(phi)
-    y = r * np.sin(theta) * np.sin(phi)
-    z = r * np.cos(theta)
+    elif sub_type == "원뿔": rt = 0.001
+    else: rt = st.sidebar.slider("윗면 반지름", 0.1, 1.9, 1.0)
     
-    fig.add_trace(go.Surface(
-        x=x, y=y, z=z, 
-        colorscale='Viridis', 
-        lighting=lighting_effects,
-        opacity=mesh_opacity, 
-        showscale=False 
-    ))
+    theta = np.linspace(0, 2*np.pi, n, endpoint=False)
+    for t in theta: points.append([rt*np.cos(t), rt*np.sin(t), h/2])
+    for t in theta: points.append([rb*np.cos(t), rb*np.sin(t), -h/2])
 
-# ========================================================
-# [레이아웃]
-# ========================================================
+elif category == "정다면체":
+    sub_type = st.sidebar.selectbox("도형", ["정사면체", "정육면체", "정팔면체", "정십이면체", "정이십면체"])
+    phi = (1 + np.sqrt(5)) / 2
+    pts = []
+    if sub_type == "정사면체": pts = [[1,1,1], [1,-1,-1], [-1,1,-1], [-1,-1,1]]
+    elif sub_type == "정육면체":
+        for x in [-1,1]:
+            for y in [-1,1]:
+                for z in [-1,1]: pts.append([x,y,z])
+    elif sub_type == "정팔면체": pts = [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]]
+    elif sub_type == "정십이면체":
+        for x in [-1,1]:
+             for y in [-1,1]:
+                 for z in [-1,1]: pts.append([x,y,z])
+        for i in [-1,1]:
+             for j in [-1,1]: pts.extend([[0,i*phi,j/phi], [j/phi,0,i*phi], [i*phi,j/phi,0]])
+    elif sub_type == "정이십면체":
+        for i in [-1,1]:
+            for j in [-1,1]: pts.extend([[0,i,j*phi], [j*phi,0,i], [i,j*phi,0]])
+    points = pts
+
+# --- 핵심 로직: ConvexHull & 가시성 판단 ---
+points = np.array(points)
+# 1. 사용자 입력대로 회전시킴
+rotated_points = rotate_points(points, rot_x, rot_y)
+
+# 2. ConvexHull 계산 (면과 이웃 정보 추출)
+hull = ConvexHull(rotated_points)
+
+# 3. 각 면(Simplex)의 법선 벡터 확인
+# ConvexHull의 equations는 [nx, ny, nz, offset] 형태이며, 법선은 바깥쪽을 향함
+normals = hull.equations[:, :3]
+
+# 4. 카메라 시점 설정 (우리는 물체를 회전시켰으므로 카메라는 고정된 위치라고 가정)
+# Plotly의 기본 뷰는 +Z 쪽에서 바라보는 것과 유사하지만, 
+# 여기서는 직관성을 위해 "화면을 뚫고 나오는 방향(+Z)"을 시선으로 가정합니다.
+# 면의 법선 z값이 > 0 이면 카메라를 향하는 것 (보임), < 0 이면 뒤로 숨은 것.
+visible_faces = []
+for i, normal in enumerate(normals):
+    # 카메라가 (0,0,infinity)에 있다고 가정하고 Orthographic projection 관점
+    # 법선의 z성분이 양수면 관측자를 향함
+    is_visible = normal[2] > 0 
+    visible_faces.append(is_visible)
+
+# 5. 엣지(모서리) 분류
+visible_edges = set()
+hidden_edges = set()
+
+# hull.simplices는 각 면을 이루는 점들의 인덱스
+# 모든 면을 순회하며 엣지 정보를 수집
+for simplex_idx, simplex in enumerate(hull.simplices):
+    # simplex는 삼각형을 이루는 3개의 점 인덱스 (예: [0, 4, 2])
+    # 이 면이 보이는지 확인
+    is_face_visible = visible_faces[simplex_idx]
+    
+    # 면의 각 변(edge)에 대해
+    num_points = len(simplex)
+    for i in range(num_points):
+        p1, p2 = simplex[i], simplex[(i+1)%num_points]
+        edge = tuple(sorted((p1, p2))) # (작은수, 큰수) 형태로 통일
+        
+        # 로직:
+        # 이 엣지는 두 면이 공유합니다.
+        # 하나라도 보이는 면에 속하면 -> 실선 (Visible)
+        # 만약 이 엣지가 이미 Visible로 등록되어 있다면 건드리지 않음
+        # 만약 Hidden으로 등록되어 있는데 지금 보니 Visible 면에 속하면 -> Visible로 승격
+        
+        if is_face_visible:
+            if edge in hidden_edges:
+                hidden_edges.remove(edge)
+            visible_edges.add(edge)
+        else:
+            # 안 보이는 면에 속함. 
+            # 단, 이미 Visible 리스트에 있다면(다른 보이는 면과 공유중이라면) Hidden으로 넣지 않음
+            if edge not in visible_edges:
+                hidden_edges.add(edge)
+
+# --- 시각화 (Plotly) ---
+fig = go.Figure()
+
+# 1. 점선 그리기 (Hidden Edges)
+x_dash, y_dash, z_dash = [], [], []
+for p1, p2 in hidden_edges:
+    pts = rotated_points[[p1, p2]]
+    x_dash.extend([pts[0][0], pts[1][0], None])
+    y_dash.extend([pts[0][1], pts[1][1], None])
+    z_dash.extend([pts[0][2], pts[1][2], None])
+
+fig.add_trace(go.Scatter3d(
+    x=x_dash, y=y_dash, z=z_dash,
+    mode='lines',
+    line=dict(color='gray', width=4, dash='dash'), # 회색 점선
+    name='보이지 않는 선',
+    hoverinfo='none'
+))
+
+# 2. 실선 그리기 (Visible Edges)
+x_solid, y_solid, z_solid = [], [], []
+for p1, p2 in visible_edges:
+    pts = rotated_points[[p1, p2]]
+    x_solid.extend([pts[0][0], pts[1][0], None])
+    y_solid.extend([pts[0][1], pts[1][1], None])
+    z_solid.extend([pts[0][2], pts[1][2], None])
+
+fig.add_trace(go.Scatter3d(
+    x=x_solid, y=y_solid, z=z_solid,
+    mode='lines',
+    line=dict(color='black', width=6), # 검은 실선
+    name='보이는 선',
+    hoverinfo='none'
+))
+
+# 3. 면 그리기 (옵션: 면을 아주 연하게 깔아서 입체감 보조)
+# 면을 그릴 때는 ConvexHull의 simplices를 그대로 사용
+fig.add_trace(go.Mesh3d(
+    x=rotated_points[:,0], y=rotated_points[:,1], z=rotated_points[:,2],
+    i=hull.simplices[:,0], j=hull.simplices[:,1], k=hull.simplices[:,2],
+    color='lightblue', opacity=0.1, # 아주 투명하게
+    lighting=dict(ambient=0.8),
+    hoverinfo='none',
+    name='면'
+))
+
+# 레이아웃 설정
 fig.update_layout(
     scene=dict(
-        xaxis_title='X', yaxis_title='Y', zaxis_title='Z',
-        aspectmode='data'
+        xaxis=dict(visible=False),
+        yaxis=dict(visible=False),
+        zaxis=dict(visible=False),
+        aspectmode='data',
+        camera=dict(
+            eye=dict(x=0, y=0, z=2.0), # 카메라를 정면(Z축 위)에 고정
+            up=dict(x=0, y=1, z=0)
+        )
     ),
-    margin=dict(l=0, r=0, b=0, t=0),
-    height=600
+    margin=dict(l=0, r=0, b=0, t=40),
+    height=600,
+    dragmode=False # 마우스 드래그를 막는 것이 오해를 줄임 (선택사항)
 )
 
 st.plotly_chart(fig, use_container_width=True)

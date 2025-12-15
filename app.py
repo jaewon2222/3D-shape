@@ -6,68 +6,55 @@ from scipy.spatial import ConvexHull
 st.set_page_config(page_title="진짜 겨냥도 생성기", layout="wide")
 st.title("📐 3D 입체도형 관측소 (Real-time 겨냥도)")
 st.markdown("""
-**마우스 드래그**는 단순히 카메라 위치만 바꿉니다.
-**반드시 왼쪽 사이드바의 [도형 회전] 슬라이더를 움직이세요.** 그래야 실선/점선이 수학적으로 다시 계산됩니다.
+**[안내]** 마우스 드래그 대신 **왼쪽 사이드바의 '도형 회전' 슬라이더**를 움직이세요.
+그래야 컴퓨터가 **어느 선이 뒤에 있는지 수학적으로 계산**하여 점선으로 바꿔줍니다.
 """)
 
-# --- 사이드바 설정 ---
+# --- 1. 사이드바 설정 ---
 st.sidebar.header("1. 도형 선택")
-category = st.sidebar.radio("카테고리", ["각기둥/각뿔/각뿔대", "원기둥/원뿔 (근사)", "정다면체"])
+category = st.sidebar.radio("카테고리", ["각기둥/각뿔/각뿔대", "원기둥/원뿔 (다각형 근사)", "정다면체"])
 
 st.sidebar.header("2. 도형 회전 (필수)")
-rot_x = st.sidebar.slider("X축 회전 (위아래)", 0, 360, 30)
-rot_y = st.sidebar.slider("Y축 회전 (좌우)", 0, 360, 45)
-# Z축은 겨냥도에서 큰 의미 없으므로 생략하거나 필요시 추가
+rot_x = st.sidebar.slider("X축 회전 (앞뒤)", 0, 360, 20)
+rot_y = st.sidebar.slider("Y축 회전 (좌우)", 0, 360, 30)
+rot_z = st.sidebar.slider("Z축 회전 (풍차)", 0, 360, 0)
 
-# --- 수학 함수: 회전 행렬 ---
-def rotate_points(points, rx, ry):
+# --- 2. 수학 함수: 회전 행렬 ---
+def rotate_points(points, rx, ry, rz):
     # 라디안 변환
-    rad_x = np.radians(rx)
-    rad_y = np.radians(ry)
+    rad_x, rad_y, rad_z = np.radians(rx), np.radians(ry), np.radians(rz)
     
     # 회전 행렬 정의
-    mat_x = np.array([
-        [1, 0, 0],
-        [0, np.cos(rad_x), -np.sin(rad_x)],
-        [0, np.sin(rad_x), np.cos(rad_x)]
-    ])
-    mat_y = np.array([
-        [np.cos(rad_y), 0, np.sin(rad_y)],
-        [0, 1, 0],
-        [-np.sin(rad_y), 0, np.cos(rad_y)]
-    ])
+    mat_x = np.array([[1, 0, 0], [0, np.cos(rad_x), -np.sin(rad_x)], [0, np.sin(rad_x), np.cos(rad_x)]])
+    mat_y = np.array([[np.cos(rad_y), 0, np.sin(rad_y)], [0, 1, 0], [-np.sin(rad_y), 0, np.cos(rad_y)]])
+    mat_z = np.array([[np.cos(rad_z), -np.sin(rad_z), 0], [np.sin(rad_z), np.cos(rad_z), 0], [0, 0, 1]])
     
-    # Y축 회전 후 X축 회전 적용
-    rotated = points @ mat_y.T
-    rotated = rotated @ mat_x.T
+    # 회전 적용 (순서: X -> Y -> Z)
+    rotated = points @ mat_x.T
+    rotated = rotated @ mat_y.T
+    rotated = rotated @ mat_z.T
     return rotated
 
-# --- 포인트 생성 로직 ---
+# --- 3. 도형 데이터 생성 ---
 points = []
 
 if category == "각기둥/각뿔/각뿔대":
     sub_type = st.sidebar.selectbox("종류", ["각기둥", "각뿔", "각뿔대"])
     n = st.sidebar.number_input("n (각형)", 3, 20, 4)
-    h = 4.0
-    rb = 2.0
-    
+    h = 4.0; rb = 2.0
     if sub_type == "각기둥": rt = rb
-    elif sub_type == "각뿔": rt = 0.001 # 0이면 ConvexHull 계산시 에러 가능성 있어 아주 작은 값
+    elif sub_type == "각뿔": rt = 0.001 # 계산 오류 방지를 위해 0 대신 아주 작은 값
     else: rt = st.sidebar.slider("윗면 반지름", 0.1, 1.9, 1.0)
     
-    # 점 생성
     theta = np.linspace(0, 2*np.pi, n, endpoint=False)
-    # 윗면
-    for t in theta: points.append([rt*np.cos(t), rt*np.sin(t), h/2])
-    # 아랫면
-    for t in theta: points.append([rb*np.cos(t), rb*np.sin(t), -h/2])
-    
-elif category == "원기둥/원뿔 (근사)":
-    # 원기둥도 다각형으로 근사하여 처리 (n=40 정도면 충분히 원 같음)
+    for t in theta: points.append([rt*np.cos(t), rt*np.sin(t), h/2]) # 윗면
+    for t in theta: points.append([rb*np.cos(t), rb*np.sin(t), -h/2]) # 아랫면
+
+elif category == "원기둥/원뿔 (다각형 근사)":
+    # 수학적 계산(ConvexHull)을 위해 원을 N각형(30각형)으로 근사합니다.
     sub_type = st.sidebar.selectbox("종류", ["원기둥", "원뿔", "원뿔대"])
-    n = 40 
-    h = 4.0
-    rb = 2.0
+    n = 30 # 충분히 원처럼 보임
+    h = 4.0; rb = 2.0
     if sub_type == "원기둥": rt = rb
     elif sub_type == "원뿔": rt = 0.001
     else: rt = st.sidebar.slider("윗면 반지름", 0.1, 1.9, 1.0)
@@ -79,84 +66,63 @@ elif category == "원기둥/원뿔 (근사)":
 elif category == "정다면체":
     sub_type = st.sidebar.selectbox("도형", ["정사면체", "정육면체", "정팔면체", "정십이면체", "정이십면체"])
     phi = (1 + np.sqrt(5)) / 2
-    pts = []
-    if sub_type == "정사면체": pts = [[1,1,1], [1,-1,-1], [-1,1,-1], [-1,-1,1]]
+    if sub_type == "정사면체": points = [[1,1,1], [1,-1,-1], [-1,1,-1], [-1,-1,1]]
     elif sub_type == "정육면체":
-        for x in [-1,1]:
-            for y in [-1,1]:
-                for z in [-1,1]: pts.append([x,y,z])
-    elif sub_type == "정팔면체": pts = [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]]
+        points = [[x,y,z] for x in [-1,1] for y in [-1,1] for z in [-1,1]]
+    elif sub_type == "정팔면체": points = [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]]
     elif sub_type == "정십이면체":
-        for x in [-1,1]:
-             for y in [-1,1]:
-                 for z in [-1,1]: pts.append([x,y,z])
+        points = [[x,y,z] for x in [-1,1] for y in [-1,1] for z in [-1,1]]
         for i in [-1,1]:
-             for j in [-1,1]: pts.extend([[0,i*phi,j/phi], [j/phi,0,i*phi], [i*phi,j/phi,0]])
+             for j in [-1,1]: points.extend([[0,i*phi,j/phi], [j/phi,0,i*phi], [i*phi,j/phi,0]])
     elif sub_type == "정이십면체":
         for i in [-1,1]:
-            for j in [-1,1]: pts.extend([[0,i,j*phi], [j*phi,0,i], [i,j*phi,0]])
-    points = pts
+            for j in [-1,1]: points.extend([[0,i,j*phi], [j*phi,0,i], [i,j*phi,0]])
 
-# --- 핵심 로직: ConvexHull & 가시성 판단 ---
 points = np.array(points)
-# 1. 사용자 입력대로 회전시킴
-rotated_points = rotate_points(points, rot_x, rot_y)
 
-# 2. ConvexHull 계산 (면과 이웃 정보 추출)
+# --- 4. 핵심 알고리즘: 보이는 선/숨은 선 계산 ---
+# 1) 점들을 회전시킵니다.
+rotated_points = rotate_points(points, rot_x, rot_y, rot_z)
+
+# 2) ConvexHull로 면(Face) 정보를 구합니다.
 hull = ConvexHull(rotated_points)
 
-# 3. 각 면(Simplex)의 법선 벡터 확인
-# ConvexHull의 equations는 [nx, ny, nz, offset] 형태이며, 법선은 바깥쪽을 향함
+# 3) 각 면의 법선 벡터(Normal Vector)를 확인합니다.
+# Plotly의 카메라는 기본적으로 +Z 방향에서 -Z 방향을 보거나, 사용자가 설정하기 나름입니다.
+# 여기서는 편의상 "화면을 뚫고 나오는 방향(+Z)"을 관측자 시점이라고 가정합니다.
+# 따라서 법선의 Z값이 양수면(>0) 우리 눈에 보이는 면, 음수면 뒤로 돌아간 면입니다.
 normals = hull.equations[:, :3]
+visible_faces = [normal[2] > 0 for normal in normals] 
 
-# 4. 카메라 시점 설정 (우리는 물체를 회전시켰으므로 카메라는 고정된 위치라고 가정)
-# Plotly의 기본 뷰는 +Z 쪽에서 바라보는 것과 유사하지만, 
-# 여기서는 직관성을 위해 "화면을 뚫고 나오는 방향(+Z)"을 시선으로 가정합니다.
-# 면의 법선 z값이 > 0 이면 카메라를 향하는 것 (보임), < 0 이면 뒤로 숨은 것.
-visible_faces = []
-for i, normal in enumerate(normals):
-    # 카메라가 (0,0,infinity)에 있다고 가정하고 Orthographic projection 관점
-    # 법선의 z성분이 양수면 관측자를 향함
-    is_visible = normal[2] > 0 
-    visible_faces.append(is_visible)
-
-# 5. 엣지(모서리) 분류
+# 4) 모든 모서리(Edge)를 분류합니다.
 visible_edges = set()
 hidden_edges = set()
 
-# hull.simplices는 각 면을 이루는 점들의 인덱스
-# 모든 면을 순회하며 엣지 정보를 수집
 for simplex_idx, simplex in enumerate(hull.simplices):
-    # simplex는 삼각형을 이루는 3개의 점 인덱스 (예: [0, 4, 2])
-    # 이 면이 보이는지 확인
-    is_face_visible = visible_faces[simplex_idx]
+    is_visible = visible_faces[simplex_idx]
     
-    # 면의 각 변(edge)에 대해
-    num_points = len(simplex)
-    for i in range(num_points):
-        p1, p2 = simplex[i], simplex[(i+1)%num_points]
-        edge = tuple(sorted((p1, p2))) # (작은수, 큰수) 형태로 통일
+    # 면을 이루는 각 선분에 대해
+    n_pts = len(simplex)
+    for i in range(n_pts):
+        p1, p2 = simplex[i], simplex[(i+1)%n_pts]
+        edge = tuple(sorted((p1, p2))) # (작은인덱스, 큰인덱스)로 통일
         
-        # 로직:
-        # 이 엣지는 두 면이 공유합니다.
-        # 하나라도 보이는 면에 속하면 -> 실선 (Visible)
-        # 만약 이 엣지가 이미 Visible로 등록되어 있다면 건드리지 않음
-        # 만약 Hidden으로 등록되어 있는데 지금 보니 Visible 면에 속하면 -> Visible로 승격
-        
-        if is_face_visible:
-            if edge in hidden_edges:
-                hidden_edges.remove(edge)
+        # 볼록 다면체의 성질:
+        # 두 면이 공유하는 모서리는, "두 면 중 하나라도 보이면" 실선입니다.
+        # "두 면이 모두 안 보일 때만" 점선입니다.
+        if is_visible:
+            # 보이는 면에 속한 모서리는 무조건 실선
+            if edge in hidden_edges: hidden_edges.remove(edge) # 혹시 숨김으로 처리됐었다면 취소
             visible_edges.add(edge)
         else:
-            # 안 보이는 면에 속함. 
-            # 단, 이미 Visible 리스트에 있다면(다른 보이는 면과 공유중이라면) Hidden으로 넣지 않음
+            # 안 보이는 면에 속함. 단, 이미 실선으로 판명난 녀석은 건드리지 않음
             if edge not in visible_edges:
                 hidden_edges.add(edge)
 
-# --- 시각화 (Plotly) ---
+# --- 5. 시각화 (그리기) ---
 fig = go.Figure()
 
-# 1. 점선 그리기 (Hidden Edges)
+# (1) 숨은 선 (점선 그리기)
 x_dash, y_dash, z_dash = [], [], []
 for p1, p2 in hidden_edges:
     pts = rotated_points[[p1, p2]]
@@ -165,14 +131,12 @@ for p1, p2 in hidden_edges:
     z_dash.extend([pts[0][2], pts[1][2], None])
 
 fig.add_trace(go.Scatter3d(
-    x=x_dash, y=y_dash, z=z_dash,
-    mode='lines',
+    x=x_dash, y=y_dash, z=z_dash, mode='lines',
     line=dict(color='gray', width=4, dash='dash'), # 회색 점선
-    name='보이지 않는 선',
-    hoverinfo='none'
+    name='보이지 않는 모서리', hoverinfo='none'
 ))
 
-# 2. 실선 그리기 (Visible Edges)
+# (2) 보이는 선 (실선 그리기)
 x_solid, y_solid, z_solid = [], [], []
 for p1, p2 in visible_edges:
     pts = rotated_points[[p1, p2]]
@@ -181,39 +145,30 @@ for p1, p2 in visible_edges:
     z_solid.extend([pts[0][2], pts[1][2], None])
 
 fig.add_trace(go.Scatter3d(
-    x=x_solid, y=y_solid, z=z_solid,
-    mode='lines',
+    x=x_solid, y=y_solid, z=z_solid, mode='lines',
     line=dict(color='black', width=6), # 검은 실선
-    name='보이는 선',
-    hoverinfo='none'
+    name='보이는 모서리', hoverinfo='none'
 ))
 
-# 3. 면 그리기 (옵션: 면을 아주 연하게 깔아서 입체감 보조)
-# 면을 그릴 때는 ConvexHull의 simplices를 그대로 사용
+# (3) 면 채우기 (입체감을 위해 연하게)
 fig.add_trace(go.Mesh3d(
     x=rotated_points[:,0], y=rotated_points[:,1], z=rotated_points[:,2],
     i=hull.simplices[:,0], j=hull.simplices[:,1], k=hull.simplices[:,2],
-    color='lightblue', opacity=0.1, # 아주 투명하게
-    lighting=dict(ambient=0.8),
-    hoverinfo='none',
-    name='면'
+    color='#dceefc', opacity=0.3, # 아주 연한 하늘색
+    lighting=dict(ambient=0.9), # 그림자 최소화
+    hoverinfo='none', name='면'
 ))
 
-# 레이아웃 설정
+# 레이아웃 고정 (카메라는 고정하고 물체를 돌렸으므로)
 fig.update_layout(
     scene=dict(
-        xaxis=dict(visible=False),
-        yaxis=dict(visible=False),
-        zaxis=dict(visible=False),
+        xaxis=dict(visible=False), yaxis=dict(visible=False), zaxis=dict(visible=False),
         aspectmode='data',
-        camera=dict(
-            eye=dict(x=0, y=0, z=2.0), # 카메라를 정면(Z축 위)에 고정
-            up=dict(x=0, y=1, z=0)
-        )
+        camera=dict(eye=dict(x=0, y=0, z=2.5), up=dict(x=0, y=1, z=0)) # 정면 뷰 고정
     ),
-    margin=dict(l=0, r=0, b=0, t=40),
+    margin=dict(l=0, r=0, b=0, t=0),
     height=600,
-    dragmode=False # 마우스 드래그를 막는 것이 오해를 줄임 (선택사항)
+    dragmode=False # 마우스 드래그 방지 (슬라이더 사용 유도)
 )
 
 st.plotly_chart(fig, use_container_width=True)

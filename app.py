@@ -3,11 +3,11 @@ import plotly.graph_objects as go
 import numpy as np
 from scipy.spatial import ConvexHull
 
-st.set_page_config(page_title="완벽한 겨냥도 v3", layout="wide")
-st.title("📐 3D 입체도형 관측소 (대각선 완벽 제거판)")
+st.set_page_config(page_title="완벽한 겨냥도 v4", layout="wide")
+st.title("📐 3D 입체도형 관측소 (최종 수정판)")
 st.markdown("""
-**[최종 수정]** '엣지 트래킹' 방식을 도입하여 평면 위의 불필요한 대각선을 강제로 삭제했습니다.
-이제 사각기둥의 옆면이 깨끗한 직사각형으로 보일 것입니다.
+**[수정 완료]** 1. **렌즈 교정:** 원근감(Perspective) 때문에 뒷면이 앞면으로 잘못 인식되던 문제를 '직교 투영(Orthographic)'으로 고정하여 해결했습니다.
+2. **대각선 삭제:** 사각형을 쪼개는 불필요한 대각선은 계속해서 제거합니다.
 """)
 
 # --- 1. 사이드바 설정 ---
@@ -66,22 +66,29 @@ elif category == "정다면체":
             for j in [-1,1]: points.extend([[0,i,j*phi], [j*phi,0,i], [i,j*phi,0]])
 points = np.array(points)
 
-# --- 4. 핵심 렌더링 로직 (완전 개편) ---
+# --- 4. 렌더링 로직 ---
 rotated_points = rotate_points(points, rot_x, rot_y, rot_z)
 hull = ConvexHull(rotated_points)
-normals = hull.equations[:, :3]
 
-# (1) 각 면이 보이는지 판단 (앞면/뒷면)
-visible_faces_mask = [normal[2] > 1e-4 for normal in normals]
+# 법선 벡터 정규화 (길이를 1로 맞춤) - 계산 정밀도 향상
+normals = []
+for eq in hull.equations:
+    n = eq[:3]
+    norm = np.linalg.norm(n)
+    if norm > 0: normals.append(n / norm)
+    else: normals.append(n)
+normals = np.array(normals)
 
-# (2) 모든 엣지를 수집하고 공유하는 면들을 기록
-# edge_to_faces = { (p1_idx, p2_idx) : [face_idx1, face_idx2, ...] }
+# (1) 면 가시성 확인 (Orthographic 기준: Z값이 0보다 크면 보임)
+# 아주 미세한 오차(epsilon)를 주어 경계면의 깜빡임 방지
+visible_faces_mask = [normal[2] > 1e-5 for normal in normals]
+
+# (2) 엣지-면 매핑
 edge_to_faces = {}
-
 for face_idx, simplex in enumerate(hull.simplices):
     n_pts = len(simplex)
     for k in range(n_pts):
-        p1, p2 = sorted((simplex[k], simplex[(k+1)%n_pts])) # 점 인덱스 정렬해서 키로 사용
+        p1, p2 = sorted((simplex[k], simplex[(k+1)%n_pts]))
         edge = (p1, p2)
         if edge not in edge_to_faces:
             edge_to_faces[edge] = []
@@ -89,60 +96,44 @@ for face_idx, simplex in enumerate(hull.simplices):
 
 # (3) 평면 판별 함수
 def is_coplanar(n1, n2):
-    norm1 = np.linalg.norm(n1)
-    norm2 = np.linalg.norm(n2)
-    if norm1 == 0 or norm2 == 0: return False
-    dot = np.dot(n1, n2) / (norm1 * norm2)
-    return dot > 0.999 # 거의 평행하면 True
+    return np.dot(n1, n2) > 0.999 # 내적이 1에 가까우면 평행
 
 visible_edges = set()
 hidden_edges = set()
 
-# (4) 엣지 분류 로직 (여기가 핵심!)
+# (4) 선 분류 로직
 for edge, faces in edge_to_faces.items():
-    # 엣지는 보통 2개의 면을 공유합니다.
     if len(faces) == 2:
         f1, f2 = faces
         n1, n2 = normals[f1], normals[f2]
         
-        # [핵심] 두 면이 평평하게 이어져 있으면(Coplanar), 이 엣지는 '가짜'입니다.
+        # [중요] 같은 평면(사각형 내부 대각선)이면 무조건 그리지 않음
         if is_coplanar(n1, n2):
-            continue # 그리지 않고 건너뜀!
+            continue 
             
-        # 평평하지 않다면 '진짜 모서리'입니다. 이제 실선/점선 구분
+        # [중요] 보이는지 안 보이는지 판단
         v1 = visible_faces_mask[f1]
         v2 = visible_faces_mask[f2]
         
-        if v1 or v2: 
-            # 둘 중 하나라도 보이면 실선
+        if v1 or v2:
             visible_edges.add(edge)
         else:
-            # 둘 다 안 보이면 점선
             hidden_edges.add(edge)
-            
     else:
-        # 면을 1개만 공유하거나 3개 이상 공유하는 특이 케이스 (보통 외곽선)
-        # 해당 면이 보이면 실선, 아니면 점선
-        is_visible = False
-        for f in faces:
-            if visible_faces_mask[f]:
-                is_visible = True
-                break
-        if is_visible:
-            visible_edges.add(edge)
-        else:
-            hidden_edges.add(edge)
+        # 경계선 예외 처리
+        is_visible = any(visible_faces_mask[f] for f in faces)
+        if is_visible: visible_edges.add(edge)
+        else: hidden_edges.add(edge)
 
-# (5) 채울 면 수집 (보이는 면만)
+# (5) 면 데이터 준비
 visible_mesh_indices = []
 for i, is_vis in enumerate(visible_faces_mask):
-    if is_vis:
-        visible_mesh_indices.append(hull.simplices[i])
+    if is_vis: visible_mesh_indices.append(hull.simplices[i])
 
-# --- 5. 시각화 ---
+# --- 5. 시각화 그리기 ---
 fig = go.Figure()
 
-# (1) 숨은 선 (점선)
+# 숨은 선 (점선)
 x_dash, y_dash, z_dash = [], [], []
 for p1, p2 in hidden_edges:
     pts = rotated_points[[p1, p2]]
@@ -156,7 +147,7 @@ fig.add_trace(go.Scatter3d(
     name='숨은 선', hoverinfo='none'
 ))
 
-# (2) 보이는 선 (실선)
+# 보이는 선 (실선)
 x_solid, y_solid, z_solid = [], [], []
 for p1, p2 in visible_edges:
     pts = rotated_points[[p1, p2]]
@@ -170,7 +161,7 @@ fig.add_trace(go.Scatter3d(
     name='보이는 선', hoverinfo='none'
 ))
 
-# (3) 면 채우기
+# 면 채우기
 if visible_mesh_indices:
     visible_mesh_indices = np.array(visible_mesh_indices)
     fig.add_trace(go.Mesh3d(
@@ -180,11 +171,17 @@ if visible_mesh_indices:
         lighting=dict(ambient=0.8), hoverinfo='none', name='면'
     ))
 
+# [핵심 수정] projection=dict(type='orthographic') 추가
+# 원근감을 제거하여 수학적 계산과 시각적 출력을 일치시킴
 fig.update_layout(
     scene=dict(
         xaxis=dict(visible=False), yaxis=dict(visible=False), zaxis=dict(visible=False),
         aspectmode='data',
-        camera=dict(eye=dict(x=0, y=0, z=2.5), up=dict(x=0, y=1, z=0))
+        camera=dict(
+            projection=dict(type='orthographic'), # 여기가 핵심입니다!
+            eye=dict(x=0, y=0, z=2.0),
+            up=dict(x=0, y=1, z=0)
+        )
     ),
     margin=dict(l=0, r=0, b=0, t=0), height=600, dragmode=False
 )

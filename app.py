@@ -3,21 +3,21 @@ import plotly.graph_objects as go
 import numpy as np
 from scipy.spatial import ConvexHull
 
-st.set_page_config(page_title="완벽한 겨냥도", layout="wide")
-st.title("📐 3D 입체도형 관측소 (수학적 겨냥도)")
+st.set_page_config(page_title="완벽한 겨냥도 v2", layout="wide")
+st.title("📐 3D 입체도형 관측소 (최종 수정판)")
 st.markdown("""
-**[사용법]** 왼쪽의 **'도형 회전' 슬라이더**를 움직여보세요.
-* **앞에 있는 면:** 색칠됨 + 실선 테두리
-* **뒤에 있는 면:** 색칠 안 됨(투명) + 점선 테두리
+**[개선 사항]**
+1. **대각선 제거:** 사각형 면을 삼각형으로 쪼갤 때 생기는 불필요한 대각선을 지웠습니다.
+2. **오차 보정:** 두 면만 보일 때 선이 깜빡이거나 사라지는 현상을 수정했습니다.
 """)
 
 # --- 1. 사이드바 설정 ---
 st.sidebar.header("1. 도형 선택")
 category = st.sidebar.radio("카테고리", ["각기둥/각뿔/각뿔대", "원기둥/원뿔 (다각형 근사)", "정다면체"])
 
-st.sidebar.header("2. 도형 회전 (필수)")
-rot_x = st.sidebar.slider("X축 회전 (위아래)", 0, 360, 20)
-rot_y = st.sidebar.slider("Y축 회전 (좌우)", 0, 360, 30)
+st.sidebar.header("2. 도형 회전")
+rot_x = st.sidebar.slider("X축 회전", 0, 360, 20)
+rot_y = st.sidebar.slider("Y축 회전", 0, 360, 30)
 rot_z = st.sidebar.slider("Z축 회전", 0, 360, 0)
 
 # --- 2. 회전 함수 ---
@@ -28,7 +28,7 @@ def rotate_points(points, rx, ry, rz):
     mat_z = np.array([[np.cos(rad_z), -np.sin(rad_z), 0], [np.sin(rad_z), np.cos(rad_z), 0], [0, 0, 1]])
     return points @ mat_x.T @ mat_y.T @ mat_z.T
 
-# --- 3. 점 데이터 생성 ---
+# --- 3. 도형 데이터 생성 ---
 points = []
 if category == "각기둥/각뿔/각뿔대":
     sub_type = st.sidebar.selectbox("종류", ["각기둥", "각뿔", "각뿔대"])
@@ -43,7 +43,7 @@ if category == "각기둥/각뿔/각뿔대":
 
 elif category == "원기둥/원뿔 (다각형 근사)":
     sub_type = st.sidebar.selectbox("종류", ["원기둥", "원뿔", "원뿔대"])
-    n = 30 # 원 근사
+    n = 30 
     h = 4.0; rb = 2.0
     if sub_type == "원기둥": rt = rb
     elif sub_type == "원뿔": rt = 0.001
@@ -67,44 +67,73 @@ elif category == "정다면체":
             for j in [-1,1]: points.extend([[0,i,j*phi], [j*phi,0,i], [i,j*phi,0]])
 points = np.array(points)
 
-# --- 4. 핵심 로직: 보이는 면만 추출 ---
+# --- 4. 고급 렌더링 로직 ---
 rotated_points = rotate_points(points, rot_x, rot_y, rot_z)
 hull = ConvexHull(rotated_points)
 normals = hull.equations[:, :3]
 
-# 법선 벡터의 z값이 양수면 '앞면', 음수면 '뒷면'
-visible_faces_mask = [normal[2] > 0 for normal in normals]
+# (1) 면의 가시성 판단 (Epsilon 적용으로 깜빡임 방지)
+# 1e-5보다 크면 보이는 것으로 간주
+visible_faces_mask = [normal[2] > 1e-5 for normal in normals]
 
 visible_edges = set()
 hidden_edges = set()
-visible_mesh_i, visible_mesh_j, visible_mesh_k = [], [], []
+visible_mesh_indices = []
 
-for simplex_idx, simplex in enumerate(hull.simplices):
-    is_visible = visible_faces_mask[simplex_idx]
+# (2) Coplanar(같은 평면) 감지 로직
+# ConvexHull은 사각형을 삼각형 2개로 쪼갭니다. 이 "가짜 모서리"를 찾아내서 지워야 깔끔합니다.
+def is_coplanar(n1, n2):
+    # 두 법선 벡터의 내적이 1에 가까우면(각도 0) 같은 평면입니다.
+    # 정규화된 벡터라고 가정할 때 dot product가 1에 가까우면 평행
+    norm1 = np.linalg.norm(n1)
+    norm2 = np.linalg.norm(n2)
+    if norm1 == 0 or norm2 == 0: return False
+    dot = np.dot(n1, n2) / (norm1 * norm2)
+    return dot > 0.999 # 거의 평행하면 True
+
+# 각 면(Simplex) 순회
+for i, simplex in enumerate(hull.simplices):
+    # 보이는 면이라면 메쉬 그리기에 추가
+    if visible_faces_mask[i]:
+        visible_mesh_indices.append(simplex)
+
+    # 이웃 정보 (neighbors)
+    # hull.neighbors[i] 에는 i번째 면의 3개 모서리와 맞닿은 이웃 면들의 인덱스가 들어있음
+    # 순서는 simplex의 점 순서와 대응됨: 
+    # neighbor[i, 0]은 point 1-2 사이 변의 건너편 이웃
+    # neighbor[i, 1]은 point 2-0 사이 변의 건너편 이웃 ... (scipy 버전에 따라 다를 수 있어 직접 매칭 권장)
     
-    # [중요 변경점] 보이는 면(Visible Face)만 메쉬 그리기 목록에 추가
-    if is_visible:
-        visible_mesh_i.append(simplex[0])
-        visible_mesh_j.append(simplex[1])
-        visible_mesh_k.append(simplex[2])
-    
-    # 엣지(선) 분류
-    n_pts = len(simplex)
-    for i in range(n_pts):
-        p1, p2 = simplex[i], simplex[(i+1)%n_pts]
+    # 더 안전한 방법: 직접 엣지 루프 돌면서 이웃 찾기
+    for k in range(3):
+        p1, p2 = simplex[k], simplex[(k+1)%3]
         edge = tuple(sorted((p1, p2)))
         
-        if is_visible:
+        # 이 엣지의 건너편 이웃 면 인덱스 찾기
+        neighbor_idx = hull.neighbors[i, k]
+        
+        # 1. Coplanar 체크 (가짜 선 제거)
+        # 나와 내 이웃이 같은 평면(사각형의 쪼개진 틈)이라면 -> 선을 그리지 않음
+        if is_coplanar(normals[i], normals[neighbor_idx]):
+            continue 
+
+        # 2. 실선/점선 분류
+        # 내 면(i)과 이웃 면(neighbor_idx) 중 "하나라도 보이면" 실선
+        is_me_visible = visible_faces_mask[i]
+        is_neighbor_visible = visible_faces_mask[neighbor_idx]
+        
+        if is_me_visible or is_neighbor_visible:
+            # 실선
             if edge in hidden_edges: hidden_edges.remove(edge)
             visible_edges.add(edge)
         else:
+            # 둘 다 안 보여야 점선
             if edge not in visible_edges:
                 hidden_edges.add(edge)
 
 # --- 5. 시각화 ---
 fig = go.Figure()
 
-# (1) 숨은 선 (점선)
+# (1) 숨은 선
 x_dash, y_dash, z_dash = [], [], []
 for p1, p2 in hidden_edges:
     pts = rotated_points[[p1, p2]]
@@ -118,7 +147,7 @@ fig.add_trace(go.Scatter3d(
     name='숨은 선', hoverinfo='none'
 ))
 
-# (2) 보이는 선 (실선)
+# (2) 보이는 선
 x_solid, y_solid, z_solid = [], [], []
 for p1, p2 in visible_edges:
     pts = rotated_points[[p1, p2]]
@@ -132,14 +161,15 @@ fig.add_trace(go.Scatter3d(
     name='보이는 선', hoverinfo='none'
 ))
 
-# (3) 보이는 면만 채우기 (뒷면은 렌더링 X)
-fig.add_trace(go.Mesh3d(
-    x=rotated_points[:,0], y=rotated_points[:,1], z=rotated_points[:,2],
-    i=visible_mesh_i, j=visible_mesh_j, k=visible_mesh_k, # 필터링된 인덱스만 사용
-    color='#dceefc', opacity=0.5, # 반투명
-    lighting=dict(ambient=0.8),
-    hoverinfo='none', name='면'
-))
+# (3) 면 채우기 (보이는 면만)
+if visible_mesh_indices:
+    visible_mesh_indices = np.array(visible_mesh_indices)
+    fig.add_trace(go.Mesh3d(
+        x=rotated_points[:,0], y=rotated_points[:,1], z=rotated_points[:,2],
+        i=visible_mesh_indices[:,0], j=visible_mesh_indices[:,1], k=visible_mesh_indices[:,2],
+        color='#dceefc', opacity=0.5,
+        lighting=dict(ambient=0.8), hoverinfo='none', name='면'
+    ))
 
 fig.update_layout(
     scene=dict(

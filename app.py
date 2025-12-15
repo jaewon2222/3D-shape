@@ -5,10 +5,10 @@ from scipy.spatial import ConvexHull
 
 # --- 페이지 설정 ---
 st.set_page_config(page_title="수학 문제집 생성기", layout="wide")
-st.title("📐 수학 문제집 도형 생성기 (완전판)")
+st.title("📐 수학 문제집 도형 생성기 (실루엣 알고리즘)")
 st.markdown("""
-**[업데이트 내역]** * **원기둥/원뿔 완벽 해결:** 옆면의 세로줄(대나무 현상)을 강제로 제거하여 외곽선(실루엣)만 남깁니다.
-* **대각선 삭제:** 사각형 면의 대각선도 깨끗하게 지워집니다.
+**[긴급 수정]** * **바코드 현상 완전 제거:** 원기둥/원뿔의 옆면 내부 선을 수학적으로 0으로 만듭니다.
+* **실루엣 알고리즘:** '보이는 면'과 '안 보이는 면'이 만나는 경계선만 그립니다.
 """)
 
 # --- 1. 사이드바 설정 ---
@@ -37,7 +37,8 @@ def rotate_points(points, rx, ry, rz):
 
 # --- 3. 도형 데이터 생성 ---
 points = []
-is_smooth_surface = False 
+# "매끈함" 옵션이 켜져 있으면, 인접한 면의 각도가 낮을 때 선을 아예 안 그립니다.
+is_curved_surface = False 
 
 if category == "각기둥/각뿔/각뿔대":
     sub_type = st.sidebar.selectbox("종류", ["각기둥", "각뿔", "각뿔대"])
@@ -51,9 +52,9 @@ if category == "각기둥/각뿔/각뿔대":
     for t in theta: points.append([rb*np.cos(t), rb*np.sin(t), -h/2])
 
 elif category == "원기둥/원뿔 (매끈함)":
-    is_smooth_surface = True
+    is_curved_surface = True
     sub_type = st.sidebar.selectbox("종류", ["원기둥", "원뿔", "원뿔대"])
-    n = 60 # 아주 촘촘하게
+    n = 80 # 곡면을 표현하기 위해 점을 많이 찍음
     h = 4.0; rb = 2.0
     if sub_type == "원기둥": rt = rb
     elif sub_type == "원뿔": rt = 0.001
@@ -77,28 +78,33 @@ elif category == "정다면체":
             for j in [-1,1]: points.extend([[0,i,j*phi], [j*phi,0,i], [i,j*phi,0]])
 points = np.array(points)
 
-# --- 4. 렌더링 로직 (매끈한 처리 추가) ---
+# --- 4. 렌더링 및 가시성 계산 ---
 rotated_points = rotate_points(points, rot_x, rot_y, rot_z)
 hull = ConvexHull(rotated_points)
 
+# 각 면의 법선 벡터 계산
 normals = []
 for eq in hull.equations:
     n_vec = eq[:3]
     normals.append(n_vec / np.linalg.norm(n_vec))
 normals = np.array(normals)
 
+# 카메라 설정 (직교/원근)
 camera_pos = np.array([0, 0, 10.0])
 visible_faces_mask = []
 
 for i, simplex in enumerate(hull.simplices):
     if "교과서 모드" in projection_mode:
+        # 직교 투영: 법선의 Z값이 양수면 보임
         is_visible = normals[i][2] > 0
     else:
+        # 원근 투영: 면의 중심에서 카메라를 향한 벡터와 법선 내적
         face_center = np.mean(rotated_points[simplex], axis=0)
-        view_vector = face_center - camera_pos
+        view_vector = face_center - camera_pos 
         is_visible = np.dot(view_vector, normals[i]) < 0
     visible_faces_mask.append(is_visible)
 
+# 엣지 정보 수집 (어떤 면들이 공유하는지)
 edge_to_faces = {}
 for face_idx, simplex in enumerate(hull.simplices):
     n_pts = len(simplex)
@@ -108,10 +114,7 @@ for face_idx, simplex in enumerate(hull.simplices):
         if edge not in edge_to_faces: edge_to_faces[edge] = []
         edge_to_faces[edge].append(face_idx)
 
-# 도우미 함수
-def is_coplanar(n1, n2):
-    return np.dot(n1, n2) > 0.999 
-
+# --- 5. 선 그리기 로직 (핵심 수정) ---
 visible_edges = set()
 hidden_edges = set()
 
@@ -121,31 +124,32 @@ for edge, faces in edge_to_faces.items():
         n1, n2 = normals[f1], normals[f2]
         v1, v2 = visible_faces_mask[f1], visible_faces_mask[f2]
         
-        # [수정된 로직 1] 평평한 면의 대각선 지우기
-        if is_coplanar(n1, n2): 
-            continue 
-        
-        # [수정된 로직 2] 원기둥/원뿔의 "대나무 선" 강력 삭제
-        if is_smooth_surface:
-            # 위/아래 뚜껑이 아닌 '옆면'인지 판단 (Z축 성분이 작으면 옆면)
-            # 만약 법선벡터의 z값이 0에 가까우면 옆면입니다. (약간의 오차 허용)
-            is_side1 = abs(n1[2]) < 0.95
-            is_side2 = abs(n2[2]) < 0.95
-            
-            # 두 면이 모두 옆면이라면? (즉, 옆면 내부의 선이라면)
-            if is_side1 and is_side2:
-                # 1. 둘 다 보이는 면이면 -> 앞면의 세로줄임 -> 삭제!
-                if v1 and v2: continue
-                # 2. 둘 다 안 보이는 면이면 -> 뒷면의 세로줄임 -> 삭제! (점선도 안 그림)
-                if not v1 and not v2: continue
-                # 3. 하나만 보이고 하나는 안 보이면? -> 그게 바로 외곽선(실루엣)! -> 유지
-        
-        # 실선/점선 분류
-        if v1 or v2:
-            visible_edges.add(edge)
+        # 두 면 사이의 각도 계산 (내적)
+        # 값이 1에 가까울수록 평평하게 이어진 면 (곡면의 일부)
+        dot_val = np.dot(n1, n2)
+        is_smooth_edge = dot_val > 0.8  # 각도가 완만하면 '부드러운 모서리'로 간주
+
+        if is_curved_surface and is_smooth_edge:
+            # [원기둥/원뿔 해결책]
+            # 부드러운 곡면에서는 '실루엣'만 그린다.
+            # 실루엣의 정의: 한 면은 보이고, 다른 면은 안 보일 때 (v1 != v2)
+            if v1 != v2:
+                visible_edges.add(edge)
+            # 둘 다 보이거나(배 부분), 둘 다 안 보이면(등 부분) -> 절대 그리지 않음!
         else:
-            hidden_edges.add(edge)
+            # [각기둥/각뿔 해결책]
+            # 각진 모서리는 평범하게 처리
+            # 하지만 평면 위의 대각선(완벽히 평평함, dot_val > 0.999)은 지움
+            if dot_val > 0.999:
+                continue
+            
+            if v1 or v2:
+                visible_edges.add(edge)
+            else:
+                hidden_edges.add(edge)
+
     else:
+        # 경계면 처리 (드물지만 안전장치)
         if any(visible_faces_mask[f] for f in faces): visible_edges.add(edge)
         else: hidden_edges.add(edge)
 
@@ -153,10 +157,10 @@ visible_mesh_indices = []
 for i, is_vis in enumerate(visible_faces_mask):
     if is_vis: visible_mesh_indices.append(hull.simplices[i])
 
-# --- 5. 시각화 ---
+# --- 6. 시각화 ---
 fig = go.Figure()
 
-# 숨은 선 (회색 점선)
+# 숨은 선 (점선)
 x_dash, y_dash, z_dash = [], [], []
 for p1, p2 in hidden_edges:
     pts = rotated_points[[p1, p2]]
@@ -170,7 +174,7 @@ fig.add_trace(go.Scatter3d(
     name='숨은 선', hoverinfo='none'
 ))
 
-# 보이는 선 (검은 실선)
+# 보이는 선 (실선)
 x_solid, y_solid, z_solid = [], [], []
 for p1, p2 in visible_edges:
     pts = rotated_points[[p1, p2]]
@@ -184,18 +188,18 @@ fig.add_trace(go.Scatter3d(
     name='보이는 선', hoverinfo='none'
 ))
 
-# 면 채우기 (흰색, 그림자 제거)
+# 면 채우기 (흰색)
 if visible_mesh_indices:
     visible_mesh_indices = np.array(visible_mesh_indices)
     fig.add_trace(go.Mesh3d(
         x=rotated_points[:,0], y=rotated_points[:,1], z=rotated_points[:,2],
         i=visible_mesh_indices[:,0], j=visible_mesh_indices[:,1], k=visible_mesh_indices[:,2],
         color='white', opacity=0.15,
-        lighting=dict(ambient=1.0, diffuse=0.0, specular=0.0),
+        lighting=dict(ambient=1.0, diffuse=0.0, specular=0.0), # 그림자 제거
         hoverinfo='none', name='면'
     ))
 
-# 카메라 및 배경 설정
+# 뷰 설정
 if "교과서 모드" in projection_mode:
     proj_type = "orthographic"
     cam_dist = 2.0
@@ -205,9 +209,7 @@ else:
 
 fig.update_layout(
     scene=dict(
-        xaxis=dict(visible=False, showbackground=False),
-        yaxis=dict(visible=False, showbackground=False),
-        zaxis=dict(visible=False, showbackground=False),
+        xaxis=dict(visible=False), yaxis=dict(visible=False), zaxis=dict(visible=False),
         bgcolor='white',
         aspectmode='data',
         camera=dict(

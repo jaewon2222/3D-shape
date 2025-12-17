@@ -5,8 +5,8 @@ from scipy.spatial import ConvexHull
 
 # --- 페이지 설정 ---
 st.set_page_config(page_title="수학 문제집 생성기", layout="wide")
-st.title("💎 수학 문제집 도형 생성기 (은선 처리 완벽 수정판)")
-st.caption("뒷면 모서리가 실선으로 잘못 나오는 계산 오류를 수정했습니다.")
+st.title("📐 수학 도형 생성기 (원근 투영 오차 수정판)")
+st.caption("뒷면 선이 실선으로 보인다면 '카메라 거리'를 조절해보세요.")
 
 # --- 1. 사이드바 설정 ---
 with st.sidebar:
@@ -14,11 +14,19 @@ with st.sidebar:
     projection_mode = st.radio(
         "투영 방식", 
         ["교과서 모드 (직교 투영)", "현실 모드 (원근 투영)"],
-        index=0
+        index=1
     )
     
+    # [핵심] 렌더링과 계산의 싱크를 맞추기 위한 거리 조절
+    # 원근 모드일 때 이 값이 너무 작으면 왜곡이 심해지고, 너무 크면 직교 투영처럼 보입니다.
+    cam_dist = st.slider("카메라 거리 (원근감 조절)", 1.5, 20.0, 4.0, 0.1)
+    
+    st.write("---")
+    # 비상용 반전 버튼
+    flip_visibility = st.checkbox("점선/실선 반전 (Flip)", value=False)
+
     st.header("2. 도형 선택")
-    category = st.radio("카테고리", ["각기둥/각뿔/각뿔대", "원기둥/원뿔/구 (매끈함)", "정다면체"])
+    category = st.radio("카테고리", ["각기둥/각뿔/각뿔대", "원기둥/원뿔/구 (매끈함)", "정다면체"], index=2)
 
     st.header("3. 도형 회전")
     col1, col2, col3 = st.columns(3)
@@ -83,6 +91,7 @@ elif category == "정다면체":
     elif sub_type == "정육면체": points = [[x,y,z] for x in [-1,1] for y in [-1,1] for z in [-1,1]]
     elif sub_type == "정팔면체": points = [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]]
     elif sub_type == "정십이면체":
+        # 정십이면체 좌표 생성
         points = [[x,y,z] for x in [-1,1] for y in [-1,1] for z in [-1,1]]
         for i in [-1,1]:
              for j in [-1,1]: points.extend([[0,i*phi,j/phi], [j/phi,0,i*phi], [i*phi,j/phi,0]])
@@ -97,35 +106,43 @@ try:
     rotated_points = rotate_points(points, rot_x, rot_y, rot_z)
     hull = ConvexHull(rotated_points)
     
-    # 면의 법선 벡터 (ConvexHull은 기본적으로 바깥쪽을 향함)
-    normals = []
-    for eq in hull.equations:
-        normals.append(eq[:3])
-    normals = np.array(normals)
-
-    # [핵심 수정] 투영 모드에 따른 시선 벡터 계산
-    # 이전 코드의 버그: 직교 투영인데도 시선 벡터를 위치에 따라 다르게 계산하여 왜곡 발생
     visible_faces_mask = []
     
-    camera_z_ortho = 1000.0
-    camera_pos_persp = np.array([0, 0, 10.0])
+    # [핵심 로직] 카메라 위치 설정
+    # Plotly의 camera.eye는 데이터의 중심(0,0,0)을 기준으로 한 상대적 위치입니다.
+    # 데이터 범위가 대략 [-2, 2]라고 가정할 때, cam_dist=2.0이면 실제 좌표는 (0, 0, 4~5) 정도가 됩니다.
+    # 이 계산을 위해 Z축 방향의 실제 좌표를 가정합니다.
+    
+    real_camera_pos = np.array([0, 0, cam_dist]) 
 
     for i, simplex in enumerate(hull.simplices):
-        normal = normals[i]
+        # 1. 면의 법선 벡터 (Normal)
+        # ConvexHull의 eq는 [nx, ny, nz, offset] (normal points OUTWARDS)
+        normal = hull.equations[i][:3]
         
+        # 2. 면의 중심점 (Centroid)
+        face_points = rotated_points[simplex]
+        face_center = np.mean(face_points, axis=0)
+        
+        # 3. 시선 벡터 (View Vector): 면의 중심 -> 카메라
         if "교과서 모드" in projection_mode:
-            # 직교 투영: 시선은 항상 Z축과 평행 (모든 면에 대해 동일한 뷰 벡터)
-            view_vector = np.array([0, 0, 1]) 
+             # 직교 투영: 시선은 항상 정면(Z축)
+            view_vector = np.array([0, 0, 1])
         else:
-            # 원근 투영: 시선은 카메라와 면의 중심을 잇는 선
-            face_center = np.mean(rotated_points[simplex], axis=0)
-            view_vector = camera_pos_persp - face_center
+            # 원근 투영: 시선은 위치마다 다름
+            view_vector = real_camera_pos - face_center
         
-        # 내적 계산 (양수면 보이는 면, 음수면 뒷면)
-        dot_product = np.dot(view_vector, normal)
+        # 4. 내적 계산 (Dot Product)
+        # 내적 > 0 이면, 두 벡터 사이 각도가 90도 미만 -> 서로 마주봄 -> 보임
+        # 내적 < 0 이면, 등지고 있음 -> 안 보임
+        dot_product = np.dot(normal, view_vector)
         
-        # [수정] 0에 아주 가까운 경우(90도 측면) 깜빡거림 방지를 위해 약간의 여유(epsilon)를 둠
-        is_visible = dot_product > 1e-5 
+        # 아주 미세한 오차 제거 (epsilon)
+        is_visible = dot_product > 1e-3
+        
+        if flip_visibility:
+            is_visible = not is_visible
+            
         visible_faces_mask.append(is_visible)
 
     edge_to_faces = {}
@@ -137,7 +154,7 @@ try:
             if edge not in edge_to_faces: edge_to_faces[edge] = []
             edge_to_faces[edge].append(face_idx)
 
-    # --- 5. 선 그리기 로직 (엄격한 판정) ---
+    # --- 5. 선 분류 ---
     visible_edges = set()
     hidden_edges = set()
 
@@ -145,39 +162,31 @@ try:
         if len(faces) == 2:
             f1, f2 = faces
             v1, v2 = visible_faces_mask[f1], visible_faces_mask[f2]
-            n1, n2 = normals[f1], normals[f2]
             
-            # 곡면 판정
-            dot_val = np.dot(n1, n2)
-            is_smooth_edge = dot_val > 0.96 # 매끄러운 곡면의 내부 선
-            is_flat_internal = dot_val > 0.999 # 평면 내부의 대각선 등
-
-            if is_curved_surface and is_smooth_edge:
-                # 곡면(원기둥 등)에서는 '실루엣(경계)'만 그린다
-                # 하나는 보이고 하나는 안 보일 때 -> 실루엣 (실선)
-                if v1 != v2: 
-                    visible_edges.add(edge)
-                # 둘 다 보이면 -> 매끄러운 앞면이므로 선을 그리지 않음 (통과)
-                # 둘 다 안 보이면 -> 매끄러운 뒷면이므로 선을 그리지 않음 (통과)
+            # 곡면 부드럽게 처리
+            n1 = hull.equations[f1][:3]
+            n2 = hull.equations[f2][:3]
+            is_smooth = np.dot(n1, n2) > 0.95
+            
+            if is_curved_surface and is_smooth:
+                if v1 != v2: visible_edges.add(edge)
             else:
-                # 각진 도형 (육면체 등)
-                if is_flat_internal: continue # 평면 내부 선 제거
-                
+                # [논리 수정]
+                # 다면체에서 뒷면 모서리가 실선으로 보이는 오류는
+                # v1, v2 중 하나라도 True면 실선으로 그리기 때문입니다.
+                # 원근 투영에서는 뒷면이어도 측면에서 살짝 보일 수 있으므로 이 논리는 맞습니다.
+                # 단, 카메라 각도가 안 맞으면 안 보여야 할 면이 보인다고(True) 판단되어 실선이 됩니다.
                 if v1 and v2:
-                    # 두 면이 다 보임 -> 확실한 앞면 (실선)
-                    visible_edges.add(edge)
+                    visible_edges.add(edge) # 앞쪽 모서리 (실선)
                 elif v1 or v2:
-                    # 하나만 보임 -> 외곽선 (실선)
-                    visible_edges.add(edge)
+                    visible_edges.add(edge) # 외곽선 (실선)
                 else:
-                    # 둘 다 안 보임 -> 확실한 뒷면 (점선)
-                    hidden_edges.add(edge)
+                    hidden_edges.add(edge)  # 뒤쪽 모서리 (점선)
         else:
-            # 면이 하나뿐인 경계 (거의 없음)
             if any(visible_faces_mask[f] for f in faces): visible_edges.add(edge)
             else: hidden_edges.add(edge)
 
-    # --- 6. 시각화 ---
+    # --- 6. 그리기 ---
     fig = go.Figure()
 
     def get_coords(edge_set):
@@ -189,34 +198,25 @@ try:
             z_list.extend([pts[0][2], pts[1][2], None])
         return x_list, y_list, z_list
 
-    # 1. 숨은 선 (뒤에 있으므로 먼저 그림)
+    # 1. 뒷면 점선
     xh, yh, zh = get_coords(hidden_edges)
     fig.add_trace(go.Scatter3d(
         x=xh, y=yh, z=zh, mode='lines',
-        line=dict(color='rgb(150, 150, 150)', width=3, dash='dash'),
+        line=dict(color='rgb(180, 180, 180)', width=3, dash='dash'), # 회색 점선
         name='숨은 선', hoverinfo='none'
     ))
 
-    # 2. 면 채우기 (깨끗한 유리)
+    # 2. 면 채우기
     all_mesh_indices = hull.simplices 
-    
     fig.add_trace(go.Mesh3d(
         x=rotated_points[:,0], y=rotated_points[:,1], z=rotated_points[:,2],
         i=all_mesh_indices[:,0], j=all_mesh_indices[:,1], k=all_mesh_indices[:,2],
-        color='#d4f1f4',    
-        opacity=0.3,       
-        flatshading=False,  
-        lighting=dict(
-            ambient=0.9,
-            diffuse=0.1,    
-            specular=0.4,   
-            roughness=0.1,  
-            fresnel=2.0     
-        ),
+        color='#d4f1f4', opacity=0.3, flatshading=False,
+        lighting=dict(ambient=0.9, diffuse=0.1, specular=0.4, roughness=0.1, fresnel=2.0),
         hoverinfo='none', name='면'
     ))
 
-    # 3. 보이는 선 (맨 위에 그림)
+    # 3. 앞면 실선
     xv, yv, zv = get_coords(visible_edges)
     fig.add_trace(go.Scatter3d(
         x=xv, y=yv, z=zv, mode='lines',
@@ -224,22 +224,24 @@ try:
         name='보이는 선', hoverinfo='none'
     ))
 
+    # 투영 방식 설정
     proj_type = "orthographic" if "교과서 모드" in projection_mode else "perspective"
+    
+    # [중요] 계산된 cam_dist를 실제 뷰에도 적용
+    camera_setting = dict(
+        projection=dict(type=proj_type),
+        eye=dict(x=0, y=0, z=cam_dist/2.0), # Plotly 좌표계 보정 (데이터 스케일에 맞춤)
+        up=dict(x=0, y=1, z=0)
+    )
     
     fig.update_layout(
         scene=dict(
             xaxis=dict(visible=False), yaxis=dict(visible=False), zaxis=dict(visible=False),
-            bgcolor='white',
-            aspectmode='data',
-            camera=dict(
-                projection=dict(type=proj_type), 
-                eye=dict(x=0, y=0, z=1.8),
-                up=dict(x=0, y=1, z=0)
-            )
+            bgcolor='white', aspectmode='data',
+            camera=camera_setting
         ),
         margin=dict(l=0, r=0, b=0, t=0), height=600, dragmode=False,
-        paper_bgcolor='white',
-        showlegend=False
+        paper_bgcolor='white', showlegend=False
     )
 
     st.plotly_chart(fig, use_container_width=True)

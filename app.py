@@ -4,9 +4,9 @@ import numpy as np
 from scipy.spatial import ConvexHull
 
 # --- 페이지 설정 ---
-st.set_page_config(page_title="완벽한 도형 생성기", layout="wide")
-st.title("📐 수학 도형 생성기 (최종_오류수정_v4)")
-st.caption("각뿔대 비대칭 시 면 뒤집힘 오류를 근본적으로 해결했습니다.")
+st.set_page_config(page_title="도형 생성기 (최종)", layout="wide")
+st.title("📐 수학 도형 생성기 (통합 수정판)")
+st.caption("각기둥, 각뿔 등 모든 도형의 앞뒤 면을 정확하게 구분하도록 수정했습니다.")
 
 # 스타일 설정
 st.markdown("""
@@ -18,14 +18,13 @@ div.stButton > button:first-child {
 </style>
 """, unsafe_allow_html=True)
 
-st.warning("⚠️ 중요: 마우스로 회전하면 점선 계산이 틀어집니다. 반드시 좌측 슬라이더를 이용하세요.")
+st.warning("⚠️ 중요: 마우스 회전보다는 좌측 슬라이더를 사용해야 점선이 정확합니다.")
 
 # --- 1. 사이드바 설정 ---
 with st.sidebar:
     st.header("1. 도형 설정")
     category = st.selectbox("카테고리", ["기둥/뿔/뿔대", "정다면체", "회전체"])
     
-    # 파라미터 딕셔너리
     params = {}
     
     if category == "기둥/뿔/뿔대":
@@ -34,15 +33,14 @@ with st.sidebar:
         params['h'] = st.slider("높이", 1.0, 5.0, 3.0)
         
         if type_ == "각기둥":
-            r = st.slider("반지름", 0.5, 3.0, 1.5)
+            r = st.slider("반지름", 0.5, 4.0, 1.5)
             params['top_r'] = params['bottom_r'] = r
         elif type_ == "각뿔":
-            params['bottom_r'] = st.slider("밑면 반지름", 0.5, 3.0, 1.5)
-            params['top_r'] = 0.0001 # 0이면 계산식에서 꼬일 수 있어 극소값 사용
+            params['bottom_r'] = st.slider("밑면 반지름", 0.5, 4.0, 1.5)
+            params['top_r'] = 0.0001
         else: # 각뿔대
-            # 오류가 났던 부분: 이제 밑면이 크든 작든 상관없음
-            params['bottom_r'] = st.slider("밑면 반지름 (Bottom)", 0.5, 4.0, 2.5)
-            params['top_r'] = st.slider("윗면 반지름 (Top)", 0.5, 4.0, 1.0)
+            params['bottom_r'] = st.slider("밑면 반지름", 0.5, 5.0, 3.0)
+            params['top_r'] = st.slider("윗면 반지름", 0.5, 5.0, 1.0)
             
     elif category == "정다면체":
         params['poly_type'] = st.selectbox("종류", ["정사면체", "정육면체", "정팔면체", "정십이면체", "정이십면체"])
@@ -50,8 +48,7 @@ with st.sidebar:
 
     elif category == "회전체":
         rot_type = st.selectbox("종류", ["원기둥", "원뿔", "원뿔대"])
-        # 회전체는 '각이 많은 각기둥'으로 처리 (은선 제거를 위해)
-        params['n'] = 50 
+        params['n'] = 60 
         params['h'] = st.slider("높이", 1.0, 5.0, 3.0)
         
         if rot_type == "원기둥":
@@ -61,70 +58,48 @@ with st.sidebar:
             params['bottom_r'] = st.slider("밑면 반지름", 0.5, 3.0, 1.5)
             params['top_r'] = 0.0001
         else: # 원뿔대
-            params['bottom_r'] = st.slider("밑면 반지름", 0.5, 4.0, 2.0)
-            params['top_r'] = st.slider("윗면 반지름", 0.5, 4.0, 1.0)
+            params['bottom_r'] = st.slider("밑면 반지름", 0.5, 5.0, 2.5)
+            params['top_r'] = st.slider("윗면 반지름", 0.5, 5.0, 1.0)
 
     st.write("---")
     st.header("2. 뷰 설정")
     rot_x = st.slider("X축 회전 (↕)", 0, 360, 20)
     rot_y = st.slider("Y축 회전 (↔)", 0, 360, 30)
     rot_z = st.slider("Z축 회전 (🔄)", 0, 360, 0)
-    
     cam_dist = st.slider("카메라 거리", 3.0, 15.0, 6.0)
     is_perspective = st.checkbox("원근 투영 (Perspective)", value=True)
 
-
-# --- 2. 핵심 로직: 도형 생성 및 방향성 보장 ---
-
+# --- 2. 도형 데이터 생성 ---
 def create_geometry(cat, **p):
-    """
-    Returns:
-        verts: 꼭짓점 좌표 (numpy array)
-        faces: 면 인덱스 리스트 or None
-        normals: 각 면의 법선 벡터 (ConvexHull인 경우에만 반환)
-    """
     verts = []
     faces = []
     
-    # [A] 직접 구성하는 도형 (기둥, 뿔, 뿔대) -> 점 순서를 100% 신뢰
+    # [A] 기둥/뿔/뿔대 & 회전체
     if cat in ["기둥/뿔/뿔대", "회전체"]:
         n = p['n']
         h = p['h']
         tr = p['top_r']
         br = p['bottom_r']
         
-        # 1. 점 생성
         theta = np.linspace(0, 2*np.pi, n, endpoint=False)
-        # 윗면 점 (z = h/2)
+        # 윗면
         for t in theta: verts.append([tr * np.cos(t), tr * np.sin(t), h/2])
-        # 아랫면 점 (z = -h/2)
+        # 아랫면
         for t in theta: verts.append([br * np.cos(t), br * np.sin(t), -h/2])
         
         verts = np.array(verts)
         
-        # 2. 면 생성 (CCW - 반시계 방향 규칙 엄수)
-        
-        # 2-1. 윗면 (Top)
-        # 위에서 볼 때 반시계: 0 -> 1 -> ... -> n-1
+        # 1. 윗면
         faces.append(list(range(n)))
-        
-        # 2-2. 아랫면 (Bottom)
-        # 아래에서 볼 때 반시계 (위에서 보면 시계): 2n-1 -> ... -> n
+        # 2. 아랫면
         faces.append(list(range(2*n-1, n-1, -1)))
-        
-        # 2-3. 옆면 (Side)
-        # Top[i] -> Bottom[i] -> Bottom[i+1] -> Top[i+1] 순서로 돌면
-        # 법선 벡터가 항상 바깥쪽(Outward)을 향함
+        # 3. 옆면
         for i in range(n):
-            t1 = i
-            t2 = (i + 1) % n
-            b1 = i + n
-            b2 = ((i + 1) % n) + n
-            faces.append([t1, b1, b2, t2])
+            faces.append([i, i+n, ((i+1)%n)+n, (i+1)%n])
             
-        return verts, faces, None # Normals는 계산 필요 없음 (점 순서 신뢰)
+        return verts, faces, None
 
-    # [B] 정다면체 -> ConvexHull 사용 (법선 벡터를 Hull에서 직접 가져옴)
+    # [B] 정다면체
     elif cat == "정다면체":
         name = p['poly_type']
         s = p['scale']
@@ -154,20 +129,15 @@ def create_geometry(cat, **p):
                      points.append([i, j*phi, 0])
         
         verts = np.array(points) * s * 0.5
-        
-        # SciPy의 ConvexHull은 법선 벡터(equations)를 정확하게 줍니다.
-        # 점 연결 순서를 따지는 것보다 이 법선을 믿는 것이 훨씬 안전합니다.
         hull = ConvexHull(verts)
-        return verts, hull.simplices, hull.equations # hull.equations: [nx, ny, nz, offset]
+        return verts, hull.simplices, hull.equations
 
     return np.array([]), [], None
 
-
 # --- 3. 메인 연산 ---
-
 verts, faces, hull_eqs = create_geometry(category, **params)
 
-# 회전 행렬 적용
+# 회전 행렬
 def get_rotation_matrix(x, y, z):
     rad = np.radians([x, y, z])
     c, s = np.cos(rad), np.sin(rad)
@@ -177,53 +147,54 @@ def get_rotation_matrix(x, y, z):
     return Rz @ Ry @ Rx
 
 rot_mat = get_rotation_matrix(rot_x, rot_y, rot_z)
-rotated_verts = verts @ rot_mat.T # 모든 점 회전
+rotated_verts = verts @ rot_mat.T 
 
-# --- 4. 가시성 판별 (Visibility Check) ---
-# 여기가 문제 해결의 핵심입니다.
-
+# --- 4. 가시성 판별 (수정됨: 모든 도형 공통 적용) ---
 camera_pos = np.array([0, 0, cam_dist])
 visible_faces_idx = set()
 
+# 도형의 무게 중심 계산 (이 점을 기준으로 '바깥'을 판단)
+object_center = np.mean(rotated_verts, axis=0)
+
 for i, face in enumerate(faces):
-    # 면의 중심점 (회전된 좌표 기준)
     face_pts = rotated_verts[face]
-    center = np.mean(face_pts, axis=0)
+    face_center = np.mean(face_pts, axis=0)
     
-    # 시선 벡터
     if is_perspective:
-        view_vec = camera_pos - center
+        view_vec = camera_pos - face_center
     else:
         view_vec = np.array([0, 0, 1])
     
-    # 법선 벡터 구하기
     normal = np.array([0.0, 0.0, 0.0])
     
     if hull_eqs is not None:
-        # [Case B] 정다면체: Hull의 Equation 사용 (가장 정확)
-        # equation: ax + by + cz + d = 0, (a,b,c)는 외향 법선
-        # 회전 전의 법선을 가져와서 회전시켜야 함
+        # 정다면체: Hull Equation 사용
         original_normal = hull_eqs[i][:3]
-        normal = original_normal @ rot_mat.T # 법선도 회전
+        normal = original_normal @ rot_mat.T 
     else:
-        # [Case A] 기둥/뿔/뿔대: 점 순서(CCW)를 믿고 외적 계산
-        # 자동 보정 로직(shape_center check)을 삭제함 -> 각뿔대 오류 해결
+        # 기둥, 뿔 등 모든 수동 생성 도형
         v1 = face_pts[1] - face_pts[0]
-        v2 = face_pts[2] - face_pts[0]
+        v2 = face_pts[-1] - face_pts[0]
         normal = np.cross(v1, v2)
-        
-    # 내적 체크 (0보다 크면 보임)
+
+        # [핵심 수정] 법선 벡터 방향 강제 교정
+        # 도형 중심에서 면 중심을 향하는 벡터(Outward)와 법선이 반대면 뒤집음
+        center_to_face = face_center - object_center
+        if np.dot(normal, center_to_face) < 0:
+            normal = -normal
+
+    # 시선과 법선 비교 (양수면 보임)
     if np.dot(normal, view_vec) > 1e-5:
         visible_faces_idx.add(i)
 
-# --- 5. 모서리 분류 (실선/점선) ---
-edge_map = {} # (p1, p2) -> [face_idx_list]
+# --- 5. 모서리 분류 및 그리기 ---
+edge_map = {} 
 
 for f_idx, face in enumerate(faces):
     n_pts = len(face)
     for i in range(n_pts):
         p1, p2 = face[i], face[(i+1)%n_pts]
-        key = tuple(sorted((p1, p2))) # (작은거, 큰거) 로 통일
+        key = tuple(sorted((p1, p2)))
         if key not in edge_map:
             edge_map[key] = []
         edge_map[key].append(f_idx)
@@ -234,15 +205,13 @@ hid_edges = []
 for (p1, p2), f_indices in edge_map.items():
     is_visible = False
     
-    # 이 모서리를 공유하는 면들 중 하나라도 보이면 실선
+    # 공유하는 면 중 하나라도 보이면 실선
     for f_idx in f_indices:
         if f_idx in visible_faces_idx:
             is_visible = True
             break
             
-    # 좌표 가져오기
     pts = rotated_verts[[p1, p2]]
-    # Plotly 라인 포맷 (x,x,None)
     line_seg = [pts[0], pts[1], [None, None, None]]
     
     if is_visible:
@@ -250,7 +219,6 @@ for (p1, p2), f_indices in edge_map.items():
     else:
         hid_edges.append(line_seg)
 
-# --- 6. 그리기 (Plotly) ---
 def flatten(seg_list):
     x, y, z = [], [], []
     for s in seg_list:
@@ -261,7 +229,7 @@ def flatten(seg_list):
 
 fig = go.Figure()
 
-# 1. 뒷면 (점선)
+# 점선 (Hidden)
 hx, hy, hz = flatten(hid_edges)
 fig.add_trace(go.Scatter3d(
     x=hx, y=hy, z=hz, mode='lines',
@@ -269,7 +237,7 @@ fig.add_trace(go.Scatter3d(
     hoverinfo='none', name='점선'
 ))
 
-# 2. 앞면 (실선)
+# 실선 (Visible)
 vx, vy, vz = flatten(vis_edges)
 fig.add_trace(go.Scatter3d(
     x=vx, y=vy, z=vz, mode='lines',
@@ -277,18 +245,17 @@ fig.add_trace(go.Scatter3d(
     hoverinfo='none', name='실선'
 ))
 
-# 3. 면 칠하기 (선택적)
+# 면 채우기
 try:
     hull = ConvexHull(rotated_verts)
     fig.add_trace(go.Mesh3d(
         x=rotated_verts[:,0], y=rotated_verts[:,1], z=rotated_verts[:,2],
         i=hull.simplices[:,0], j=hull.simplices[:,1], k=hull.simplices[:,2],
-        color='#d0f0fd', opacity=0.1, flatshading=True, hoverinfo='none', name='면'
+        color='#d0f0fd', opacity=0.1, flatshading=True, hoverinfo='none'
     ))
 except:
     pass
 
-# 카메라 설정
 fig.update_layout(
     scene=dict(
         xaxis=dict(visible=False), yaxis=dict(visible=False), zaxis=dict(visible=False),
@@ -298,7 +265,7 @@ fig.update_layout(
             up=dict(x=0, y=1, z=0)
         ),
         aspectmode='data',
-        dragmode=False # 마우스 회전 금지
+        dragmode=False
     ),
     margin=dict(l=0, r=0, t=0, b=0),
     height=650,

@@ -5,8 +5,8 @@ from scipy.spatial import ConvexHull
 
 # --- 페이지 설정 ---
 st.set_page_config(page_title="완벽한 도형 생성기", layout="wide")
-st.title("📐 수학 도형 생성기 (최종_디버깅)")
-st.caption("✅ 정다면체 대각선 삭제 + 실선/점선 판정 완벽 수정")
+st.title("📐 수학 도형 생성기 (정사영 고정판)")
+st.caption("✅ 원근 투영 제거(정사영 고정) + 대각선 삭제 + 실선/점선 완벽")
 
 # 스타일 설정
 st.markdown("""
@@ -67,8 +67,9 @@ with st.sidebar:
     rot_x = st.slider("X축 회전 (↕)", 0, 360, 20)
     rot_y = st.slider("Y축 회전 (↔)", 0, 360, 30)
     rot_z = st.slider("Z축 회전 (🔄)", 0, 360, 0)
-    cam_dist = st.slider("카메라 거리", 3.0, 15.0, 6.0)
-    is_perspective = st.checkbox("원근 투영 (Perspective)", value=True)
+    
+    # 정사영 모드에서는 카메라 거리가 '줌(Zoom)' 역할을 합니다.
+    cam_zoom = st.slider("줌 (Zoom)", 0.5, 3.0, 1.0)
 
 
 # --- 2. 도형 데이터 생성 ---
@@ -87,7 +88,6 @@ def create_geometry(cat, **p):
         for t in theta: verts.append([br * np.cos(t), br * np.sin(t), -h/2])
         
         verts = np.array(verts)
-        # ConvexHull을 사용하여 면을 자동으로 구성 (가장 확실한 방법)
         hull = ConvexHull(verts)
         return verts, hull.simplices
 
@@ -140,36 +140,26 @@ def get_rotation_matrix(x, y, z):
 rot_mat = get_rotation_matrix(rot_x, rot_y, rot_z)
 rotated_verts = verts @ rot_mat.T 
 
-# --- 4. 면의 법선 벡터 및 가시성 계산 ---
-# 각 삼각형 면(simplex)의 법선 벡터를 구합니다.
+# --- 4. 면의 법선 벡터 및 가시성 계산 (정사영 모드) ---
 face_normals = []
 face_visible = []
-camera_pos = np.array([0, 0, cam_dist])
+# 정사영(Orthographic)에서는 뷰 벡터가 항상 Z축 방향 [0,0,1]로 고정됩니다.
+view_vec = np.array([0, 0, 1])
 
 for face in simplices:
-    # 회전된 좌표 기준으로 법선 계산
     pts = rotated_verts[face]
     v1 = pts[1] - pts[0]
     v2 = pts[2] - pts[0]
     norm = np.cross(v1, v2)
-    norm = norm / (np.linalg.norm(norm) + 1e-9) # 정규화
+    norm = norm / (np.linalg.norm(norm) + 1e-9) 
     face_normals.append(norm)
     
-    # 가시성 판별
-    center = np.mean(pts, axis=0)
-    if is_perspective:
-        view_vec = camera_pos - center
-        view_vec = view_vec / (np.linalg.norm(view_vec) + 1e-9)
-    else:
-        view_vec = np.array([0, 0, 1])
-        
-    # 카메라를 향하면(내적 > 0) 보이는 면
+    # 카메라(Z축 무한대)를 향하면 보이는 면
     face_visible.append(np.dot(norm, view_vec) > 1e-4)
 
-# --- 5. 모서리 분류 (대각선 삭제 및 실선/점선 구분 로직 개선) ---
-edge_map = {} # (p1, p2) -> [face_idx1, face_idx2, ...]
+# --- 5. 모서리 분류 ---
+edge_map = {} 
 
-# 모든 삼각형 면의 변을 수집
 for f_idx, face in enumerate(simplices):
     n_pts = len(face)
     for i in range(n_pts):
@@ -184,44 +174,30 @@ hid_edges = []
 current_n = int(params.get('n', 0))
 
 for (p1, p2), f_indices in edge_map.items():
-    # 1. 인접한 면이 2개 미만이면(열린 도형 등) 일단 그림 (예외처리)
-    if len(f_indices) < 2:
-        continue
+    if len(f_indices) < 2: continue
         
     f1_idx = f_indices[0]
     f2_idx = f_indices[1]
     
-    # 2. [대각선 삭제] 두 면의 법선 벡터가 거의 같으면(평행하면) 그 사이 선은 '내부 대각선'이므로 삭제
-    # 내적값이 1에 가까우면 같은 방향을 보는 면임
+    # [대각선 삭제] 평행한 면 사이의 선 제거
     normal_dot = np.dot(face_normals[f1_idx], face_normals[f2_idx])
     if normal_dot > 0.999: 
-        # 단, 회전체(원기둥 옆면)는 부드럽게 보여야 하므로 제외하지 않음? 
-        # 아니요, 회전체도 옆면 띠를 없애려면 이 로직이 필요합니다.
-        # 하지만 원기둥의 '모서리'는 그려야 하므로, 카테고리에 따라 다름.
-        
-        # 정다면체나 각기둥의 평평한 면 위의 대각선은 확실히 삭제
         if category != "회전체":
             continue
-        # 회전체일 경우, 세로선(감옥창살) 제거 로직을 따름
     
-    # 3. [회전체 창살 제거]
+    # [회전체 창살 제거]
     is_vertical_edge = False
     if category == "회전체":
-        # 인덱스 차이가 n이면 세로선
         if abs(p1 - p2) == current_n:
             is_vertical_edge = True
-            
         if is_vertical_edge:
-            # 외곽선(실루엣)만 그림: 하나는 보이고 하나는 안 보일 때
             vis1 = face_visible[f1_idx]
             vis2 = face_visible[f2_idx]
-            if vis1 != vis2: # XOR
+            if vis1 != vis2: 
                 vis_edges.append([rotated_verts[p1], rotated_verts[p2]])
-            continue # 나머지 세로선은 생략
+            continue 
     
-    # 4. [실선/점선 판정]
-    # 인접한 두 면 중 하나라도 보이면 -> 실선 (겉에 드러난 모서리)
-    # 인접한 두 면이 모두 안 보이면 -> 점선 (뒤쪽에 숨은 모서리)
+    # [실선/점선 판정]
     is_vis_f1 = face_visible[f1_idx]
     is_vis_f2 = face_visible[f2_idx]
     
@@ -230,7 +206,6 @@ for (p1, p2), f_indices in edge_map.items():
     if is_vis_f1 or is_vis_f2:
         vis_edges.append(line_seg)
     else:
-        # 회전체가 아닐 때만 점선 그림 (회전체 내부는 지저분하므로)
         if category != "회전체":
             hid_edges.append(line_seg)
 
@@ -246,7 +221,7 @@ def flatten(seg_list):
 
 fig = go.Figure()
 
-# 1. 점선 (Hidden)
+# 1. 점선
 hx, hy, hz = flatten(hid_edges)
 fig.add_trace(go.Scatter3d(
     x=hx, y=hy, z=hz, mode='lines',
@@ -254,7 +229,7 @@ fig.add_trace(go.Scatter3d(
     hoverinfo='none', name='점선'
 ))
 
-# 2. 실선 (Visible)
+# 2. 실선
 vx, vy, vz = flatten(vis_edges)
 fig.add_trace(go.Scatter3d(
     x=vx, y=vy, z=vz, mode='lines',
@@ -262,10 +237,8 @@ fig.add_trace(go.Scatter3d(
     hoverinfo='none', name='실선'
 ))
 
-# 3. 면 (투명도 조절)
-# 회전체는 약간 더 불투명하게, 다면체는 내부 점선 보이게 투명하게
+# 3. 면
 opacity = 0.5 if category == "회전체" else 0.15
-
 fig.add_trace(go.Mesh3d(
     x=rotated_verts[:,0], y=rotated_verts[:,1], z=rotated_verts[:,2],
     i=simplices[:,0], j=simplices[:,1], k=simplices[:,2],
@@ -274,16 +247,19 @@ fig.add_trace(go.Mesh3d(
     hoverinfo='none', name='면'
 ))
 
+# 카메라 줌 설정 (정사영 모드에 맞게 변환)
+camera_eye = 2.0 / cam_zoom if cam_zoom > 0 else 2.0
+
 fig.update_layout(
     scene=dict(
         xaxis=dict(visible=False), yaxis=dict(visible=False), zaxis=dict(visible=False),
         camera=dict(
-            projection=dict(type="perspective" if is_perspective else "orthographic"),
-            eye=dict(x=0, y=0, z=cam_dist*0.2),
+            projection=dict(type="orthographic"), # 정사영 고정
+            eye=dict(x=0, y=0, z=camera_eye),     # 줌 레벨 조절
             up=dict(x=0, y=1, z=0)
         ),
         aspectmode='data',
-        dragmode=False # 마우스 회전 금지
+        dragmode=False 
     ),
     margin=dict(l=0, r=0, t=0, b=0),
     height=600,

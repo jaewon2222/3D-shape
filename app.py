@@ -68,9 +68,10 @@ with st.sidebar:
     rot_y = st.slider("Y축 회전 (↔)", 0, 360, 30)
     rot_z = st.slider("Z축 회전 (🔄)", 0, 360, 0)
     
-    # 정사영 모드에서는 카메라 거리가 '줌(Zoom)' 역할을 합니다.
+    # [수정] 정사영 모드에서는 카메라 거리가 '줌(Zoom)' 역할을 합니다.
     cam_zoom = st.slider("줌 (Zoom)", 0.5, 3.0, 1.0)
-
+    
+    # [삭제] is_perspective 체크박스 삭제됨
 
 # --- 2. 도형 데이터 생성 ---
 def create_geometry(cat, **p):
@@ -140,10 +141,12 @@ def get_rotation_matrix(x, y, z):
 rot_mat = get_rotation_matrix(rot_x, rot_y, rot_z)
 rotated_verts = verts @ rot_mat.T 
 
-# --- 4. 면의 법선 벡터 및 가시성 계산 (정사영 모드) ---
+# --- 4. 면의 법선 벡터 및 가시성 계산 (정사영 고정) ---
 face_normals = []
 face_visible = []
-# 정사영(Orthographic)에서는 뷰 벡터가 항상 Z축 방향 [0,0,1]로 고정됩니다.
+
+# [수정] 정사영(Orthographic)에서는 뷰 벡터가 항상 Z축 방향 [0,0,1]로 고정됩니다.
+# (우리가 물체를 회전시키고 카메라는 고정되어 있기 때문)
 view_vec = np.array([0, 0, 1])
 
 for face in simplices:
@@ -154,7 +157,7 @@ for face in simplices:
     norm = norm / (np.linalg.norm(norm) + 1e-9) 
     face_normals.append(norm)
     
-    # 카메라(Z축 무한대)를 향하면 보이는 면
+    # 카메라를 향하면(내적 > 0) 보이는 면
     face_visible.append(np.dot(norm, view_vec) > 1e-4)
 
 # --- 5. 모서리 분류 ---
@@ -247,7 +250,8 @@ fig.add_trace(go.Mesh3d(
     hoverinfo='none', name='면'
 ))
 
-# 카메라 줌 설정 (정사영 모드에 맞게 변환)
+# [수정] 카메라 줌 설정 (정사영 모드에 맞게 변환)
+# Orthographic에서 eye 벡터의 길이는 Zoom factor와 같습니다 (작을수록 확대)
 camera_eye = 2.0 / cam_zoom if cam_zoom > 0 else 2.0
 
 fig.update_layout(

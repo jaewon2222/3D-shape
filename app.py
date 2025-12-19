@@ -81,12 +81,10 @@ def make_prism_like(n_sides, r_bottom, r_top, height):
     # 와이어프레임 (다각형일 때만)
     if n_sides < 30:
         xl, yl, zl = [], [], []
-        # 가로선
         for x, y, z in [(x_b, y_b, z_b), (x_t, y_t, z_t)]:
             xl.extend(x); xl.append(None)
             yl.extend(y); yl.append(None)
             zl.extend(z); zl.append(None)
-        # 세로선
         for k in range(n_sides):
             xl.extend([x_b[k], x_t[k], None])
             yl.extend([y_b[k], y_t[k], None])
@@ -127,7 +125,6 @@ def make_platonic_solid(solid_type, size):
     return [mesh, lines]
 
 def make_sphere(radius):
-    """구 생성"""
     phi, theta = np.meshgrid(np.linspace(0, np.pi, 30), np.linspace(0, 2 * np.pi, 60))
     x = radius * np.sin(phi) * np.cos(theta)
     y = radius * np.sin(phi) * np.sin(theta)
@@ -135,61 +132,67 @@ def make_sphere(radius):
     return [go.Surface(x=x, y=y, z=z, colorscale='Viridis', showscale=False, opacity=0.9)]
 
 # ==========================================
-# 2. 사이드바 UI 로직 (메뉴 분리)
+# 2. 사이드바 UI 로직 (카테고리 개편)
 # ==========================================
 
 st.sidebar.header("도형 선택")
 
-# 최상위 카테고리를 명확하게 분리
+# 1. 대분류: 다각형(각~) vs 회전체(원~) vs 정다면체/구
 category = st.sidebar.selectbox(
-    "어떤 도형을 만드나요?",
-    ("기둥 (Prism/Cylinder)", "뿔 (Pyramid/Cone)", "뿔대 (Frustum)", "정다면체", "구")
+    "카테고리",
+    ("다각형 입체도형 (각기둥/각뿔...)", "회전체 (원기둥/원뿔...)", "정다면체", "구")
 )
 
 fig = go.Figure()
 traces = []
 title_text = ""
 
-# --- A. 기둥 / 뿔 / 뿔대 로직 ---
-if category in ["기둥 (Prism/Cylinder)", "뿔 (Pyramid/Cone)", "뿔대 (Frustum)"]:
+# --- A. 다각형 입체도형 로직 ---
+if "다각형" in category:
+    # 2. 하위 형태 선택 (기둥/뿔/뿔대)
+    shape_type = st.sidebar.radio("형태 선택", ["기둥", "뿔", "뿔대"], horizontal=True)
     
-    # 1. 밑면 형태 선택
-    base_shape = st.sidebar.radio("밑면의 모양", ["다각형", "원형"])
-    
-    # 2. 변의 개수 (다각형일 때만)
-    if base_shape == "다각형":
-        sides = st.sidebar.slider("밑면 변의 개수 (n)", 3, 12, 4)
-        n = sides
-    else:
-        n = 60 # 원형은 변을 많이
-        sides = 0 # 텍스트용
-
-    # 3. 공통 슬라이더
+    sides = st.sidebar.slider("밑면의 변 (n)", 3, 12, 4)
     r_bottom = st.sidebar.slider("밑면 반지름", 1.0, 10.0, 5.0)
     h = st.sidebar.slider("높이", 1.0, 20.0, 10.0)
 
-    # 4. 카테고리별 특수 로직 (반지름 결정)
-    if "기둥" in category:
-        r_top = r_bottom # 기둥은 위아래가 같음
-        # 이름 생성
-        if base_shape == "원형": title_text = "원기둥"
-        else: title_text = f"{sides}각기둥"
-        
-    elif "뿔" in category and "뿔대" not in category: # 순수 뿔
-        r_top = 0 # 뿔은 윗면이 0
-        if base_shape == "원형": title_text = "원뿔"
-        else: title_text = f"{sides}각뿔"
-        
+    # 반지름 로직
+    if shape_type == "기둥":
+        r_top = r_bottom
+        title_text = f"{sides}각기둥"
+    elif shape_type == "뿔":
+        r_top = 0
+        title_text = f"{sides}각뿔"
     else: # 뿔대
-        r_top = st.sidebar.slider("윗면 반지름 (밑면과 다르게)", 0.1, 10.0, 3.0)
-        if base_shape == "원형": title_text = "원뿔대"
-        else: title_text = f"{sides}각뿔대"
-
-    # 그리기
-    traces = make_prism_like(n, r_bottom, r_top, h)
+        r_top = st.sidebar.slider("윗면 반지름", 0.1, 10.0, 3.0)
+        title_text = f"{sides}각뿔대"
+        
+    traces = make_prism_like(sides, r_bottom, r_top, h)
 
 
-# --- B. 정다면체 로직 ---
+# --- B. 회전체(원형) 로직 ---
+elif "회전체" in category:
+    # 2. 하위 형태 선택 (기둥/뿔/뿔대)
+    shape_type = st.sidebar.radio("형태 선택", ["기둥", "뿔", "뿔대"], horizontal=True)
+    
+    r_bottom = st.sidebar.slider("밑면 반지름", 1.0, 10.0, 5.0)
+    h = st.sidebar.slider("높이", 1.0, 20.0, 10.0)
+    
+    # 반지름 로직 (원은 변 개수 n=60 고정)
+    if shape_type == "기둥":
+        r_top = r_bottom
+        title_text = "원기둥"
+    elif shape_type == "뿔":
+        r_top = 0
+        title_text = "원뿔"
+    else: # 뿔대
+        r_top = st.sidebar.slider("윗면 반지름", 0.1, 10.0, 3.0)
+        title_text = "원뿔대"
+        
+    traces = make_prism_like(60, r_bottom, r_top, h)
+
+
+# --- C. 정다면체 ---
 elif category == "정다면체":
     solid_type = st.sidebar.selectbox(
         "종류",
@@ -200,7 +203,7 @@ elif category == "정다면체":
     title_text = solid_type
 
 
-# --- C. 구 로직 ---
+# --- D. 구 ---
 elif category == "구":
     r = st.sidebar.slider("반지름", 1.0, 10.0, 5.0)
     traces = make_sphere(r)

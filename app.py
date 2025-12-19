@@ -4,71 +4,100 @@ import numpy as np
 
 # --- 페이지 설정 ---
 st.set_page_config(page_title="3D 입체도형 시뮬레이터", layout="wide")
-st.title("🧊 3D 입체도형 시뮬레이터")
+st.title("🧊 3D 입체도형 시뮬레이터 (완성판)")
 
 # --- 사이드바 설정 ---
 st.sidebar.header("도형 설정")
 shape_type = st.sidebar.selectbox(
     "도형을 선택하세요",
-    ("다각형 기둥/뿔/대 (Prism/Pyramid)", "원형 기둥/뿔/대 (Cylinder/Cone)", "구 (Sphere)")
+    ("다각형 기둥/뿔/대", "원형 기둥/뿔/대", "구 (Sphere)")
 )
 
-# --- 3D 그리기 함수 (면 + 모서리 분리 버전) ---
-def make_prism_like(n_sides, r_bottom, r_top, height):
-    # 1. 좌표 생성 (0 ~ 2pi)
+# --- 유틸리티 함수: 다각형 뚜껑/바닥 만들기 ---
+def create_cap(r, height, n_sides, is_top=True):
+    """
+    중심점과 테두리를 연결하여 다각형/원형의 면을 채우는 함수
+    """
+    if r <= 0: return None # 반지름이 0이면(뾰족한 뿔의 끝) 면을 만들 필요 없음
+
+    # 1. 테두리 점 좌표 생성
     theta = np.linspace(0, 2 * np.pi, n_sides + 1)
+    x_edge = r * np.cos(theta)
+    y_edge = r * np.sin(theta)
+    z_val = height if is_top else 0
+    z_edge = np.full_like(theta, z_val)
+
+    # 2. 중심점 추가 (리스트의 맨 마지막에 추가)
+    x = np.append(x_edge, 0)
+    y = np.append(y_edge, 0)
+    z = np.append(z_edge, z_val)
+
+    # 3. 인덱스 생성 (Triangle Fan 방식)
+    # 중심점(마지막 인덱스) -> i -> i+1
+    center_idx = len(x) - 1
+    i = np.arange(n_sides)
     
-    # 밑면과 윗면 좌표 생성
+    return go.Mesh3d(
+        x=x, y=y, z=z,
+        i=np.full(n_sides, center_idx), # 모든 삼각형의 시작은 중심점
+        j=i,                            # 테두리 현재 점
+        k=(i + 1) % (n_sides + 1),      # 테두리 다음 점
+        color='skyblue',
+        opacity=0.8,
+        flatshading=True,
+        name='Top' if is_top else 'Bottom'
+    )
+
+# --- 메인 그리기 함수 ---
+def make_prism_like(n_sides, r_bottom, r_top, height):
+    traces = []
+    
+    # 기본 좌표 생성
+    theta = np.linspace(0, 2 * np.pi, n_sides + 1)
     x_bottom = r_bottom * np.cos(theta)
     y_bottom = r_bottom * np.sin(theta)
     z_bottom = np.zeros_like(theta)
-    
     x_top = r_top * np.cos(theta)
     y_top = r_top * np.sin(theta)
     z_top = np.full_like(theta, height)
     
-    # --- [Step 1] 면(Face) 그리기 (Mesh3d) ---
-    # 메쉬 구성을 위해 마지막 중복 점은 제외하고 슬라이싱
-    xb_m, yb_m, zb_m = x_bottom[:-1], y_bottom[:-1], z_bottom[:-1]
-    xt_m, yt_m, zt_m = x_top[:-1], y_top[:-1], z_top[:-1]
-    
+    # 1. 옆면 (Side Walls) 그리기
     # 좌표 합치기
-    x_mesh = np.concatenate([xb_m, xt_m])
-    y_mesh = np.concatenate([yb_m, yt_m])
-    z_mesh = np.concatenate([zb_m, zt_m])
+    x_side = np.concatenate([x_bottom[:-1], x_top[:-1]])
+    y_side = np.concatenate([y_bottom[:-1], y_top[:-1]])
+    z_side = np.concatenate([z_bottom[:-1], z_top[:-1]])
     
-    # 인덱스 생성 (삼각형 2개로 사각형 면 만들기)
+    i = np.arange(n_sides)
     n = n_sides
-    i = np.arange(n)
+    next_i = (i + 1) % n
     
-    # 옆면을 구성하는 점들의 인덱스
-    # 0~n-1: 밑면 점들, n~2n-1: 윗면 점들
-    # 삼각형 1: 밑면(i) -> 밑면(i+1) -> 윗면(i)
-    # 삼각형 2: 윗면(i) -> 밑면(i+1) -> 윗면(i+1)
-    
-    next_i = (i + 1) % n  # 마지막 점은 0번 점과 연결
-    
-    i_list = np.concatenate([i, i + n])
-    j_list = np.concatenate([next_i, next_i])
-    k_list = np.concatenate([i + n, next_i + n])
-    
-    # Mesh 객체 생성
-    mesh = go.Mesh3d(
-        x=x_mesh, y=y_mesh, z=z_mesh,
-        i=i_list, j=j_list, k=k_list,
+    # 옆면 삼각형 구성
+    mesh_side = go.Mesh3d(
+        x=x_side, y=y_side, z=z_side,
+        i=np.concatenate([i, i + n]),
+        j=np.concatenate([next_i, next_i]),
+        k=np.concatenate([i + n, next_i + n]),
         color='skyblue',
         opacity=0.8,
-        flatshading=True,  # 각진 느낌을 살림
-        name='Face'
+        flatshading=True,
+        name='Side'
     )
+    traces.append(mesh_side)
+
+    # 2. 바닥면 (Bottom Cap) 채우기
+    bottom_cap = create_cap(r_bottom, 0, n_sides, is_top=False)
+    if bottom_cap: traces.append(bottom_cap)
+
+    # 3. 윗면 (Top Cap) 채우기
+    top_cap = create_cap(r_top, height, n_sides, is_top=True)
+    if top_cap: traces.append(top_cap)
     
-    # --- [Step 2] 모서리 선(Edge Lines) 그리기 ---
-    # 원형(변이 많음)일 때는 테두리를 굳이 그리지 않음 (너무 복잡해짐)
-    lines = None
-    if n_sides < 30: 
+    # 4. 모서리 선 (Wireframe) 그리기
+    # 원형(n_sides >= 30)일 때는 테두리 선을 생략하여 깔끔하게 표현
+    if n_sides < 30:
         x_lines, y_lines, z_lines = [], [], []
         
-        # 밑면 테두리
+        # 바닥 테두리
         x_lines.extend(x_bottom); x_lines.append(None)
         y_lines.extend(y_bottom); y_lines.append(None)
         z_lines.extend(z_bottom); z_lines.append(None)
@@ -78,8 +107,7 @@ def make_prism_like(n_sides, r_bottom, r_top, height):
         y_lines.extend(y_top); y_lines.append(None)
         z_lines.extend(z_top); z_lines.append(None)
         
-        # 옆면 세로선 (각 모서리)
-        # 마지막 닫는 점까지 포함된 theta 배열 길이 사용
+        # 옆면 세로선
         for k in range(n_sides):
             x_lines.extend([x_bottom[k], x_top[k], None])
             y_lines.extend([y_bottom[k], y_top[k], None])
@@ -88,66 +116,61 @@ def make_prism_like(n_sides, r_bottom, r_top, height):
         lines = go.Scatter3d(
             x=x_lines, y=y_lines, z=z_lines,
             mode='lines',
-            line=dict(color='black', width=4),
+            line=dict(color='black', width=3),
             name='Edge'
         )
+        traces.append(lines)
     
-    # 리스트로 반환 (lines가 없으면 mesh만)
-    return [mesh, lines] if lines else [mesh]
+    return traces
 
 def make_sphere(radius):
     phi = np.linspace(0, np.pi, 30)
     theta = np.linspace(0, 2 * np.pi, 60)
     phi, theta = np.meshgrid(phi, theta)
-    
     x = radius * np.sin(phi) * np.cos(theta)
     y = radius * np.sin(phi) * np.sin(theta)
-    z = radius * np.cos(phi) + radius # 구의 중심을 z=radius로 올려서 바닥 위에 놓기
-    
+    z = radius * np.cos(phi) + radius 
     return [go.Surface(x=x, y=y, z=z, colorscale='Blues', showscale=False, opacity=0.9)]
 
-# --- 메인 로직 ---
+# --- 메인 실행 로직 ---
 fig = go.Figure()
 traces = []
 
-if shape_type == "다각형 기둥/뿔/대 (Prism/Pyramid)":
+if shape_type == "다각형 기둥/뿔/대":
     sides = st.sidebar.slider("밑면의 변의 개수 (n)", 3, 12, 4)
     r_b = st.sidebar.slider("밑면 반지름", 0.0, 10.0, 5.0)
-    r_t = st.sidebar.slider("윗면 반지름 (0이면 뿔)", 0.0, 10.0, 5.0)
+    r_t = st.sidebar.slider("윗면 반지름 (0=뿔)", 0.0, 10.0, 5.0)
     h = st.sidebar.slider("높이", 1.0, 20.0, 10.0)
-    
     traces = make_prism_like(sides, r_b, r_t, h)
     
-    shape_name = "각기둥" if r_b == r_t else ("각뿔" if r_t == 0 else "각뿔대")
-    st.subheader(f"{sides}{shape_name}")
+    name = "각기둥" if r_b == r_t else ("각뿔" if r_t == 0 else "각뿔대")
+    st.subheader(f"{sides}{name}")
 
-elif shape_type == "원형 기둥/뿔/대 (Cylinder/Cone)":
+elif shape_type == "원형 기둥/뿔/대":
     r_b = st.sidebar.slider("밑면 반지름", 0.0, 10.0, 5.0)
-    r_t = st.sidebar.slider("윗면 반지름 (0이면 원뿔)", 0.0, 10.0, 5.0)
+    r_t = st.sidebar.slider("윗면 반지름 (0=원뿔)", 0.0, 10.0, 5.0)
     h = st.sidebar.slider("높이", 1.0, 20.0, 10.0)
+    traces = make_prism_like(60, r_b, r_t, h) # 변 60개로 원 표현
     
-    # 원형은 변의 개수를 60개로 설정
-    traces = make_prism_like(60, r_b, r_t, h)
-    
-    shape_name = "원기둥" if r_b == r_t else ("원뿔" if r_t == 0 else "원뿔대")
-    st.subheader(shape_name)
+    name = "원기둥" if r_b == r_t else ("원뿔" if r_t == 0 else "원뿔대")
+    st.subheader(name)
 
 elif shape_type == "구 (Sphere)":
     r = st.sidebar.slider("반지름", 1.0, 10.0, 5.0)
     traces = make_sphere(r)
     st.subheader("구")
 
-# --- [중요] 리스트로 받은 Trace들을 하나씩 추가 ---
+# Trace 추가
 for trace in traces:
     fig.add_trace(trace)
 
-# --- 차트 레이아웃 ---
+# 레이아웃 업데이트
 fig.update_layout(
     scene=dict(
-        xaxis=dict(visible=False), # 축 눈금 숨기기 (깔끔하게)
+        xaxis=dict(visible=False),
         yaxis=dict(visible=False),
         zaxis=dict(visible=False),
-        aspectmode='data' # 비율 왜곡 방지
+        aspectmode='data'
     ),
     margin=dict(l=0, r=0, b=0, t=0),
     height=600
